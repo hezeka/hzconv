@@ -41,6 +41,8 @@ class VideoConverter extends EventEmitter {
           break;
       }
 
+      console.log('test:', filePath, outputPath, format, videoBitrate, audioBitrate)
+
       return new Promise((resolve, reject) => {
         const command = ffmpeg(filePath)
           .output(outputPath)

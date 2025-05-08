@@ -1,30 +1,37 @@
 <template>
     <div class="directory-conversion">
-      <h3>Конвертация директории</h3>
+      <!-- <h3>Конвертация директории</h3> -->
       
       <el-form v-if="!isConverting" :model="formData" label-width="160px" class="settings-form">
         <!-- Выбор директории -->
-        <el-form-item label="Выбрать директорию">
+        <el-form-item label="Путь">
           <div class="dir-selector">
-            <el-input v-model="formData.dirPath" placeholder="Выберите директорию" readonly />
+            <el-input v-model="formData.dirPath" placeholder="Выберите директорию" />
             <el-button @click="selectDirectory">Выбрать</el-button>
           </div>
         </el-form-item>
         
         <!-- Вложенные опции -->
-        <el-form-item label="Опции поиска">
+        <el-form-item label="Опции">
           <el-row :gutter="20">
-            <el-col :span="12">
+            <el-col>
               <el-checkbox v-model="formData.recursive">Включая подпапки</el-checkbox>
-            </el-col>
-            <el-col :span="12">
               <el-checkbox v-model="formData.preserveSubfolders">Сохранять структуру папок</el-checkbox>
             </el-col>
           </el-row>
         </el-form-item>
         
+        <!-- Фильтр файлов -->
+        <el-form-item label="Фильтр форматов" prop="formatFilter">
+          <el-input 
+            v-model="formData.formatFilter" 
+            placeholder="Введите форматы через запятую (jpg, png) или оставьте пустым для всех"
+          />
+          <span class="form-hint">Оставьте пустым, чтобы обработать все поддерживаемые форматы</span>
+        </el-form-item>
+        
         <!-- Формат конвертации -->
-        <el-form-item label="Формат конвертации" prop="format">
+        <el-form-item label="Формат" prop="format">
           <el-select 
             v-model="formData.format" 
             placeholder="Выберите формат"
@@ -73,12 +80,16 @@
         </el-form-item>
         
         <!-- Директория сохранения -->
-        <el-form-item label="Директория сохранения" prop="saveOption">
-          <el-radio-group v-model="formData.saveOption">
-            <el-radio value="original">В исходной папке</el-radio>
-            <el-radio value="subdir">В подпапке</el-radio>
-            <el-radio value="custom">Выбрать папку</el-radio>
-          </el-radio-group>
+        <el-form-item label="Сохранить" prop="saveOption">
+          <el-select 
+            v-model="formData.saveOption"
+            placeholder="Путь сохранения"
+            style="width: 100%"
+          >
+            <el-option label="В исходной папке" value="original" />
+            <el-option label="В подпапке" value="subdir" />
+            <el-option label="Выбрать папку" value="custom" />
+          </el-select>
         </el-form-item>
         
         <!-- Поддиректория (если выбрана опция subdir) -->
@@ -99,8 +110,7 @@
           <div class="dir-selector">
             <el-input 
               v-model="formData.outputDir" 
-              placeholder="Путь к папке сохранения" 
-              readonly
+              placeholder="Путь сохранения"
             />
             <el-button @click="selectOutputDir">Выбрать</el-button>
           </div>
@@ -108,28 +118,19 @@
         
         <!-- Префикс имени файла -->
         <el-form-item label="Префикс файла" prop="prefix">
-          <el-input v-model="formData.prefix" placeholder="Префикс (опционально)" />
+          <el-input v-model="formData.prefix" placeholder="Например, conv_" />
         </el-form-item>
         
         <!-- Политика перезаписи -->
-        <el-form-item label="При совпадении имен" prop="overwritePolicy">
-          <el-radio-group v-model="formData.overwritePolicy">
-            <el-radio value="overwrite">Перезаписать</el-radio>
-            <el-radio value="rename">Переименовать</el-radio>
-            <el-radio value="skip">Пропустить</el-radio>
-          </el-radio-group>
+        <el-form-item label="При конфликте" prop="overwritePolicy">
+          <el-select v-model="formData.overwritePolicy" placeholder="Выберите политику">
+            <el-option value="overwrite" label="Перезаписать"></el-option>
+            <el-option value="rename" label="Переименовать"></el-option>
+            <el-option value="skip" label="Пропустить"></el-option>
+          </el-select>
         </el-form-item>
         
-        <!-- Фильтр файлов -->
-        <el-form-item label="Фильтр форматов" prop="formatFilter">
-          <el-input 
-            v-model="formData.formatFilter" 
-            placeholder="Введите форматы через запятую (jpg, png) или оставьте пустым для всех"
-          />
-          <span class="form-hint">Оставьте пустым, чтобы обработать все поддерживаемые форматы</span>
-        </el-form-item>
-        
-        <el-form-item>
+        <div class="form-actions">
           <el-button 
             type="primary" 
             :disabled="!formData.dirPath || !formData.format"
@@ -137,7 +138,7 @@
           >
             Начать конвертацию директории
           </el-button>
-        </el-form-item>
+        </div>
       </el-form>
       
       <!-- Отображение прогресса конвертации директории -->
@@ -469,6 +470,11 @@
   .progress-actions {
     margin-top: 20px;
     text-align: center;
+  }
+
+  .form-actions {
+    margin-top: 20px;
+    text-align: right;
   }
   </style>
   

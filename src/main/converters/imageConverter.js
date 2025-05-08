@@ -59,7 +59,7 @@ class ImageConverter extends EventEmitter {
 
       const image = sharp(filePath);
       const metadata = await image.metadata();
-      console.log(`- Метаданные изображения: ${JSON.stringify(metadata)}`);
+      // console.log(`- Метаданные изображения: ${JSON.stringify(metadata)}`);
 
       this.emit("progress", 0.3);
 

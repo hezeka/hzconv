@@ -1,17 +1,23 @@
 <template>
   <div class="container">
     <el-card class="app-container">
-      <template #header>
+      <div class="header">
+        Hzconv
+        <div style="-webkit-app-region: no-drag;" class="el-button" @click="close()">
+          Закрыть
+        </div>
+      </div>
+      <!-- <template #header>
         <div class="header">
           <h2>Конвертер медиафайлов</h2>
         </div>
-      </template>
+      </template> -->
       
       <el-tabs v-model="activeTab">
         <el-tab-pane label="Отдельные файлы" name="files">
           <FileDropZone 
             :supportedFormats="supportedFormats" 
-            @files-selected="handleFilesSelected" 
+            @files-selected="handleFilesSelected"
           />
           
           <ConversionForm
@@ -88,6 +94,74 @@
   </div>
 </template>
 
+<style>
+.header {
+  -webkit-app-region: drag;
+  margin: calc(var(--el-card-padding) * -1);
+  padding: var(--el-card-padding);
+  margin-bottom: 0;
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  background: #ffffff9e;
+  backdrop-filter: blur(8px);
+  z-index: 1000;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+body {
+  margin: 0;
+}
+.container {
+  width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  max-width: unset !important;
+}
+
+.el-card {
+  /* border-radius: 0; */
+  /* box-shadow: 0; */
+  height: 100vh;
+  box-sizing: border-box;
+  overflow: auto;
+}
+/* @media screen and (max-width: 1000px) {
+  body {
+    margin: 0;
+  }
+  .container {
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .el-card {
+    border-radius: 0;
+    box-shadow: 0;
+    height: 100vh;
+    box-sizing: border-box;
+    overflow: auto;
+  }
+} */
+
+*::-webkit-scrollbar,
+html *::-webkit-scrollbar {
+  height: 4px;
+  width: 4px;
+}
+*::-webkit-scrollbar-track,
+html *::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, .1);
+}
+*::-webkit-scrollbar-thumb,
+html *::-webkit-scrollbar-thumb {
+  background-color: #6d6d6d80;
+  border-radius: 5px;
+  border: 3px solid rgba(0, 0, 0, 0);
+}
+  </style>
+
 <script>
 import { ref, onMounted, computed, onUnmounted } from 'vue';
 import FileDropZone from './components/FileDropZone.vue';
@@ -142,7 +216,7 @@ const loadSupportedFormats = async () => {
 
 // Работа с отдельными файлами
 const handleFilesSelected = (files) => {
-  selectedFiles.value = [...files];
+  selectedFiles.value = [...selectedFiles.value, ...files];
 };
 
 const removeFile = (index) => {
@@ -306,6 +380,11 @@ onUnmounted(() => {
   window.electronAPI.removeAllListeners();
 });
 
+const close = () => {
+  console.log('Closing')
+  window.electronAPI.window('close');
+}
+
 return {
   activeTab,
   supportedFormats,
@@ -326,7 +405,8 @@ return {
   clearResults,
   startDirectoryConversion,
   completeDirectoryConversion,
-  cancelDirectoryConversion
+  cancelDirectoryConversion,
+  close
 };
 }
 };

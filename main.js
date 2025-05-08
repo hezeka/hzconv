@@ -234,20 +234,37 @@ let mainWindow;
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 900,
-    height: 700,
+    width: 600,
+    height: 590 + 70,
+    minWidth: 500,
+    minHeight: 500,
+    maxWidth: 790,
+    maxHeight: 830,
+    resizable: true,
+    frame: false, // Убирает стандартную рамку окна
+    titleBarStyle: 'hidden',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false
-    }
+    },
+    icon: path.join(__dirname, 'path/to/icon.png'),
+    autoHideMenuBar: true,
+    transparent: true
   });
+
+  // splashWindow.loadFile('splash.html');
+
+  // mainWindow.once('ready-to-show', () => {
+  //   splashWindow.close();
+  //   mainWindow.show();
+  // });
 
   // Загружаем HTML-файл в окно
   if (process.env.NODE_ENV === 'development') {
     // В режиме разработки загружаем локальный сервер Vue на порту 8085
     mainWindow.loadURL('http://localhost:8085');
-    mainWindow.webContents.openDevTools();
+    // mainWindow.webContents.openDevTools();
   } else {
     // В продакшне загружаем собранный HTML
     mainWindow.loadFile(path.join(__dirname, 'dist', 'index.html'));
@@ -257,7 +274,26 @@ async function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+    mainWindow.webContents.executeJavaScript(`
+      document.body.style.opacity = 0;
+      let fadeIn = setInterval(() => {
+        let opacity = parseFloat(document.body.style.opacity);
+        if (opacity < 1) {
+          document.body.style.opacity = opacity + 0.1;
+        } else {
+          clearInterval(fadeIn);
+        }
+      }, 30);
+    `);
+  });
 }
+
+
+
+
 
 // Запуск приложения
 app.whenReady().then(() => {
@@ -322,6 +358,28 @@ function logDetail(prefix, object) {
 // Обработчик для конвертации одного файла через IPC
 ipcMain.handle('convert-file', async (event, { filePath, options }) => {
   return await convertSingleFile(filePath, options);
+});
+
+
+ipcMain.handle('window', async (event, command) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  
+  switch(command) {
+    case 'close':
+      window.close();
+      app.quit();
+      break;
+    case 'minimize':
+      window.minimize();
+      break;
+    case 'maximize':
+      if (window.isMaximized()) {
+        window.unmaximize();
+      } else {
+        window.maximize();
+      }
+      break;
+  }
 });
 
 

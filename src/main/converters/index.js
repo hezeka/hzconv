@@ -15,6 +15,8 @@ const allSupportedFormats = {
   audio: audioConverter.getSupportedFormats()
 };
 
+console.log('Форматы:', allSupportedFormats)
+
 // Функция для определения типа файла по расширению
 function getFileType(filePath) {
   const ext = path.extname(filePath).toLowerCase().substring(1);
@@ -34,10 +36,13 @@ function getFileType(filePath) {
 function getConverter(fileType) {
   switch (fileType) {
     case 'image':
+      console.log('Конвертер картинок')
       return imageConverter;
     case 'video':
+      console.log('Видео конвертер')
       return videoConverter;
     case 'audio':
+      console.log('Аудио конвертер')
       return audioConverter;
     default:
       throw new Error(`Неподдерживаемый тип файла: ${fileType}`);

@@ -29,6 +29,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       options: params.options ? JSON.parse(JSON.stringify(params.options)) : {}
     });;
   },
+
+  window: (event) => {
+    return ipcRenderer.invoke('window', event)
+  },
   
   // События
   onConversionProgress: (callback) => {

@@ -1,6 +1,6 @@
 <template>
   <div class="conversion-form">
-    <h3>Настройки конвертации</h3>
+    <!-- <h3>Настройки конвертации</h3> -->
     
     <div v-if="files.length > 0" class="selected-files">
       <div class="files-header">
@@ -10,7 +10,7 @@
         </el-button>
       </div>
       
-      <el-scrollbar height="150px">
+      <el-scrollbar max-height="150px">
         <div 
           v-for="(file, index) in files" 
           :key="index" 
@@ -18,12 +18,11 @@
         >
           <div class="file-name">{{ getFileName(file) }}</div>
           <el-button 
-            type="danger" 
-            size="small" 
-            circle 
+            type="" 
+            size="small"
             @click="$emit('remove-file', index)"
           >
-            <el-icon><Delete /></el-icon>
+            Убрать
           </el-button>
         </div>
       </el-scrollbar>
@@ -36,7 +35,7 @@
       class="settings-form"
     >
       <!-- Формат конвертации -->
-      <el-form-item label="Формат конвертации" prop="format">
+      <el-form-item label="Формат" prop="format">
         <el-select 
           v-model="formData.format" 
           placeholder="Выберите формат"
@@ -85,12 +84,16 @@
       </el-form-item>
       
       <!-- Директория сохранения -->
-      <el-form-item label="Директория сохранения" prop="saveOption">
-        <el-radio-group v-model="formData.saveOption">
-          <el-radio value="original">В исходной папке</el-radio>
-          <el-radio value="subdir">В подпапке</el-radio>
-          <el-radio value="custom">Выбрать папку</el-radio>
-        </el-radio-group>
+      <el-form-item label="Сохранить" prop="saveOption">
+        <el-select 
+            v-model="formData.saveOption"
+            placeholder="Путь сохранения"
+            style="width: 100%"
+          >
+            <el-option label="В исходной папке" value="original" />
+            <el-option label="В подпапке" value="subdir" />
+            <el-option label="Выбрать папку" value="custom" />
+          </el-select>
       </el-form-item>
       
       <!-- Поддиректория (если выбрана опция subdir) -->
@@ -111,8 +114,7 @@
         <div class="dir-selector">
           <el-input 
             v-model="formData.outputDir" 
-            placeholder="Путь к папке сохранения" 
-            readonly
+            placeholder="Путь сохранения"
           />
           <el-button @click="selectOutputDir">Выбрать</el-button>
         </div>
@@ -120,16 +122,16 @@
       
       <!-- Префикс имени файла -->
       <el-form-item label="Префикс файла" prop="prefix">
-        <el-input v-model="formData.prefix" placeholder="Префикс (опционально)" />
+        <el-input v-model="formData.prefix" placeholder="Например, conv_" />
       </el-form-item>
       
       <!-- Политика перезаписи -->
-      <el-form-item label="При совпадении имен" prop="overwritePolicy">
-        <el-radio-group v-model="formData.overwritePolicy">
-          <el-radio value="overwrite">Перезаписать</el-radio>
-          <el-radio value="rename">Переименовать</el-radio>
-          <el-radio value="skip">Пропустить</el-radio>
-        </el-radio-group>
+      <el-form-item label="При конфликте" prop="overwritePolicy">
+        <el-select v-model="formData.overwritePolicy" placeholder="Выберите политику">
+          <el-option value="overwrite" label="Перезаписать"></el-option>
+          <el-option value="rename" label="Переименовать"></el-option>
+          <el-option value="skip" label="Пропустить"></el-option>
+        </el-select>
       </el-form-item>
     </el-form>
     
@@ -239,7 +241,7 @@ export default {
 .selected-files {
   margin-bottom: 20px;
   border: 1px solid #ebeef5;
-  border-radius: 4px;
+  border-radius: 6px;
 }
 
 .files-header {

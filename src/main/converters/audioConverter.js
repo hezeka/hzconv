@@ -6,7 +6,7 @@ const EventEmitter = require('events');
 class AudioConverter extends EventEmitter {
   constructor() {
     super();
-    this.supportedFormats = ['mp3', 'wav', 'ogg', 'aac', 'flac', 'm4a'];
+    this.supportedFormats = ['mp3', 'wav', 'ogg', 'flac', 'm4a'];
   }
 
   getSupportedFormats() {
@@ -37,6 +37,8 @@ class AudioConverter extends EventEmitter {
           audioBitrate = '192k';
           break;
       }
+
+      console.log('test:', filePath, outputPath, format, audioBitrate)
 
       return new Promise((resolve, reject) => {
         const command = ffmpeg(filePath)

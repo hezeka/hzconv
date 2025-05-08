@@ -10,16 +10,18 @@
       <el-icon class="drop-icon"><Upload /></el-icon>
       <div class="drop-text">
         Перетащите файлы сюда или
-        <el-button type="primary" size="small" @click="openFileDialog">
+        <br>
+        <br>
+        <el-button @click="openFileDialog">
           выберите файлы
         </el-button>
       </div>
-      <div class="supported-formats">
+      <!-- <div class="supported-formats">
         <small>
           Поддерживаемые форматы: 
           <span v-if="allFormats.length > 0">{{ allFormats.join(', ') }}</span>
         </small>
-      </div>
+      </div> -->
     </div>
   </div>
 </template>
@@ -128,12 +130,15 @@ export default {
 
 <style scoped>
 .drop-zone {
-  border: 2px dashed #dcdfe6;
-  border-radius: 8px;
-  padding: 40px 20px;
+  border: 1px dashed #dcdfe6;
+  border-radius: 12px;
+  padding: 20px 20px;
   text-align: center;
   margin-bottom: 20px;
   transition: background-color 0.3s, border-color 0.3s;
+  background-color: #dcdfe616;
+  font-size: 14px;
+  color: #b1b1b1;
 }
 
 .drop-zone.active {
@@ -149,7 +154,8 @@ export default {
 
 .drop-text {
   margin-bottom: 10px;
-  color: #606266;
+  color: #aaadb2;
+  font-weight: 400;
 }
 
 .supported-formats {
