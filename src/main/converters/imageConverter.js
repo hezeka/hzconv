@@ -21,14 +21,8 @@ class ImageConverter extends EventEmitter {
     return this.supportedFormats;
   }
 
-  // src/main/converters/imageConverter.js
   async convert(filePath, outputPath, options = {}) {
     try {
-      console.log("Конвертация изображения:");
-      console.log(`- Исходный файл: ${filePath}`);
-      console.log(`- Целевой файл: ${outputPath}`);
-      console.log(`- Опции: ${JSON.stringify(options)}`);
-
       // Проверяем, существует ли входной файл
       if (!fs.existsSync(filePath)) {
         const error = new Error(`Исходный файл не существует: ${filePath}`);
@@ -48,8 +42,6 @@ class ImageConverter extends EventEmitter {
       }
 
       const format = options.format || path.extname(outputPath).slice(1);
-      console.log(`- Используемый формат: ${format}`);
-      console.log(`- Используемое качество: ${quality}`);
 
       // Создаем директорию, если она не существует
       await fs.ensureDir(path.dirname(outputPath));
@@ -58,8 +50,7 @@ class ImageConverter extends EventEmitter {
       this.emit("progress", 0.1);
 
       const image = sharp(filePath);
-      const metadata = await image.metadata();
-      // console.log(`- Метаданные изображения: ${JSON.stringify(metadata)}`);
+      await image.metadata();
 
       this.emit("progress", 0.3);
 
@@ -84,18 +75,13 @@ class ImageConverter extends EventEmitter {
           pipeline = pipeline.tiff({ quality });
           break;
         default:
-          console.log(`- Использую формат по умолчанию: ${format}`);
           pipeline = pipeline.toFormat(format);
       }
 
       this.emit("progress", 0.5);
 
       // Сохраняем результат
-      console.log(`- Сохраняем в: ${outputPath}`);
-      const outputInfo = await pipeline.toFile(outputPath);
-      console.log(
-        `- Информация о выходном файле: ${JSON.stringify(outputInfo)}`
-      );
+      await pipeline.toFile(outputPath);
 
       // Проверяем, что файл действительно создан
       if (!fs.existsSync(outputPath)) {
@@ -117,7 +103,6 @@ class ImageConverter extends EventEmitter {
         outputPath: outputPath,
       };
     } catch (error) {
-      console.error("Ошибка конвертации изображения:", error);
       this.emit("error", error);
       throw error;
     }

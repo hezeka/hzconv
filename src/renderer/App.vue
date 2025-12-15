@@ -44,21 +44,29 @@
       <!-- Прогресс конвертации файлов -->
       <div v-if="isConverting" class="progress-section">
         <h3>Прогресс конвертации</h3>
-        
+
         <div v-for="(item, index) in conversionProgress" :key="index" class="file-progress">
           <div class="file-name">{{ getFileName(item.filePath) }}</div>
-          <el-progress 
-            :percentage="Math.round(item.progress * 100)" 
+          <el-progress
+            :percentage="Math.round(item.progress * 100)"
             :status="item.status === 'active' ? '' : item.status"
+            :duration="0"
           />
         </div>
-        
+
         <div class="total-progress">
           <div>Общий прогресс</div>
-          <el-progress 
-            :percentage="Math.round(getTotalProgress() * 100)" 
+          <el-progress
+            :percentage="Math.round(getTotalProgress() * 100)"
             :status="conversionStatus === 'active' ? '' : conversionStatus"
+            :duration="0"
           />
+        </div>
+
+        <div class="progress-actions">
+          <el-button type="danger" @click="cancelConversion">
+            Отменить конвертацию
+          </el-button>
         </div>
       </div>
       
@@ -195,13 +203,33 @@ export default {
     const isDirectoryConverting = ref(false);
     
     // Расчет статистики
-const successCount = computed(() => 
-  conversionResults.value.filter(result => result.success).length
-);
+const successCount = computed(() => {
+  return conversionResults.value.reduce((total, result) => {
+    // Если это результат директории, суммируем successCount
+    if (result.isDirectory) {
+      return total + (result.successCount || 0);
+    }
+    // Если это обычный файл и он успешен
+    if (result.success) {
+      return total + 1;
+    }
+    return total;
+  }, 0);
+});
 
-const errorCount = computed(() => 
-  conversionResults.value.filter(result => !result.success).length
-);
+const errorCount = computed(() => {
+  return conversionResults.value.reduce((total, result) => {
+    // Если это результат директории, суммируем errorCount
+    if (result.isDirectory) {
+      return total + (result.errorCount || 0);
+    }
+    // Если это обычный файл и он неуспешен (и не отменен)
+    if (!result.success && !result.cancelled) {
+      return total + 1;
+    }
+    return total;
+  }, 0);
+});
 
 // Загрузка поддерживаемых форматов
 const loadSupportedFormats = async () => {
@@ -248,84 +276,100 @@ const startConversion = async (options) => {
     ElMessage.warning('Выберите файлы для конвертации');
     return;
   }
-  
+
   try {
+    // ВАЖНО: Сначала очищаем предыдущие результаты и прогресс
+    conversionResults.value = [];
+    conversionProgress.value = [];
+
+    // Ждем следующий тик, чтобы DOM обновился
+    await new Promise(resolve => setTimeout(resolve, 0));
+
     // Инициализируем прогресс для каждого файла
     conversionProgress.value = selectedFiles.value.map(file => ({
       filePath: file,
       progress: 0,
       status: 'active'
     }));
-    
+
     // Устанавливаем статус конвертации
     isConverting.value = true;
     conversionStatus.value = 'active';
-    
+
     // Настраиваем обработчики событий
     window.electronAPI.onConversionProgress((data) => {
       const index = conversionProgress.value.findIndex(
         item => item.filePath === data.filePath
       );
-      
+
       if (index !== -1) {
         conversionProgress.value[index].progress = data.progress;
       }
     });
-    
+
     window.electronAPI.onConversionError((data) => {
       const index = conversionProgress.value.findIndex(
         item => item.filePath === data.filePath
       );
-      
+
       if (index !== -1) {
         conversionProgress.value[index].status = 'exception';
-        
-        // Добавляем результат с ошибкой
-        conversionResults.value.push({
-          filePath: data.filePath,
-          success: false,
-          error: data.error
-        });
       }
     });
-    
+
     // Запускаем конвертацию
     const results = await window.electronAPI.convertFiles({
       files: selectedFiles.value.map(f => String(f)), // Преобразуем в простые строки
       options
     });
-    
+
+    // Очищаем старые результаты перед добавлением новых
+    const newResults = [];
+
     // Обрабатываем результаты
     results.forEach(result => {
       // Обновляем статус в прогрессе
       const index = conversionProgress.value.findIndex(
-        item => item.filePath === result.inputPath
+        item => item.filePath === result.inputPath || item.filePath === result.filePath
       );
-      
+
       if (index !== -1) {
         conversionProgress.value[index].status = result.success ? 'success' : 'exception';
         conversionProgress.value[index].progress = 1; // 100%
       }
-      
+
       // Добавляем в результаты
-      conversionResults.value.push({
-        filePath: result.inputPath,
+      newResults.push({
+        filePath: result.inputPath || result.filePath,
         outputPath: result.outputPath,
-        success: result.success,
-        error: result.error
+        success: result.success && !result.cancelled,
+        error: result.error,
+        cancelled: result.cancelled
       });
     });
-    
+
+    // Заменяем результаты
+    conversionResults.value = newResults;
+
     // Обновляем общий статус
     conversionStatus.value = 'success';
-    
+
+    // Подсчитываем успешные и неуспешные конвертации
+    const successfulCount = newResults.filter(r => r.success).length;
+    const failedCount = newResults.filter(r => !r.success && !r.cancelled).length;
+    const cancelledCount = newResults.filter(r => r.cancelled).length;
+
     // Выводим сообщение
-    if (successCount.value > 0) {
-      ElMessage.success(`Успешно конвертировано: ${successCount.value} файл(ов)`);
+    if (successfulCount > 0) {
+      ElMessage.success(`Успешно конвертировано: ${successfulCount} файл(ов)`);
     }
-    
-    if (errorCount.value > 0) {
-      ElMessage.error(`Ошибки при конвертации: ${errorCount.value} файл(ов)`);
+
+    if (failedCount > 0) {
+      ElMessage.error(`Ошибки при конвертации: ${failedCount} файл(ов)`);
+    }
+
+    if (cancelledCount > 0) {
+      ElMessage.warning(`Отменено: ${cancelledCount} файл(ов)`);
     }
   } catch (error) {
     console.error('Ошибка при конвертации файлов:', error);
@@ -338,6 +382,17 @@ const startConversion = async (options) => {
   }
 };
 
+// Отмена конвертации
+const cancelConversion = async () => {
+  try {
+    await window.electronAPI.cancelConversion();
+    ElMessage.warning('Запрос на отмену конвертации отправлен');
+  } catch (error) {
+    console.error('Ошибка при отмене конвертации:', error);
+    ElMessage.error('Не удалось отменить конвертацию');
+  }
+};
+
 // Очистка результатов
 const clearResults = () => {
   conversionResults.value = [];
@@ -346,6 +401,10 @@ const clearResults = () => {
 
 // Работа с конвертацией директории
 const startDirectoryConversion = () => {
+  // Очищаем предыдущие результаты
+  conversionResults.value = [];
+  conversionProgress.value = [];
+
   isDirectoryConverting.value = true;
   // Активируем вкладку директории
   activeTab.value = 'directory';
@@ -398,6 +457,7 @@ return {
   removeFile,
   clearFiles,
   startConversion,
+  cancelConversion,
   getTotalProgress,
   getFileName,
   successCount,
@@ -456,5 +516,10 @@ return {
   margin-top: 20px;
   padding-top: 10px;
   border-top: 1px solid #e6e6e6;
+}
+
+.progress-actions {
+  margin-top: 20px;
+  text-align: center;
 }
 </style>

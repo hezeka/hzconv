@@ -1,6 +1,7 @@
 // src/main/utils/fileManager.js
 const fs = require('fs-extra');
 const path = require('path');
+const logger = require('./logger');
 
 class FileManager {
   /**
@@ -11,92 +12,99 @@ class FileManager {
    * @returns {string} - Путь для сохранения
    */
   static generateOutputPath(inputPath, sourceDirPath = null, options = {}) {
-    console.log('Генерация пути:', { inputPath, sourceDirPath, options });
-    
     // Если второй параметр - объект, а не строка, то это опции
     if (sourceDirPath && typeof sourceDirPath === 'object') {
       options = sourceDirPath;
       sourceDirPath = null;
-      console.log('sourceDirPath обнаружен как options:', { options });
     }
-    
+
     const {
       outputDir, // Директория сохранения (если не указана, используется директория оригинала)
       subDir,    // Поддиректория для сохранения (создается в outputDir)
       prefix,    // Префикс имени файла
       format,    // Новый формат файла
-      overwritePolicy // Политика перезаписи: 'overwrite', 'skip', 'rename'
+      overwritePolicy, // Политика перезаписи: 'overwrite', 'skip', 'rename'
+      preserveSubfolders = false // Сохранять ли структуру подпапок
     } = options;
-    
+
     const originalDir = path.dirname(inputPath);
     const originalName = path.basename(inputPath, path.extname(inputPath));
     const newExt = format ? `.${format}` : path.extname(inputPath);
-    
-    console.log('Данные пути:', {
-      originalDir,
-      originalName, 
-      newExt,
-      format
-    });
-    
-    // Определяем директорию сохранения
-    let saveDir;
-    
+
+    // Определяем базовую директорию сохранения
+    let baseOutputDir;
+
     if (outputDir) {
-      // Если указана выходная директория, используем ее
-      saveDir = outputDir;
-      console.log('Используется указанная выходная директория:', saveDir);
+      // Поддержка относительных путей
+      if (path.isAbsolute(outputDir)) {
+        baseOutputDir = outputDir;
+      } else {
+        // Относительный путь разрешается от директории исходного файла или sourceDirPath
+        const basePath = sourceDirPath || originalDir;
+        baseOutputDir = path.resolve(basePath, outputDir);
+      }
     } else if (sourceDirPath) {
       // Если указан исходный путь директории, используем его
-      saveDir = sourceDirPath;
-      console.log('Используется исходный путь директории:', saveDir);
+      baseOutputDir = sourceDirPath;
     } else {
       // По умолчанию используем директорию оригинального файла
-      saveDir = originalDir;
-      console.log('Используется директория оригинального файла:', saveDir);
+      baseOutputDir = originalDir;
     }
-    
+
     // Если указана поддиректория, добавляем её
     if (subDir) {
-      saveDir = path.join(saveDir, subDir);
-      console.log('Добавлена поддиректория, итоговый путь:', saveDir);
+      baseOutputDir = path.join(baseOutputDir, subDir);
     }
-    
+
+    // Определяем финальную директорию с учетом сохранения структуры
+    let finalOutputDir = baseOutputDir;
+
+    // Если нужно сохранить структуру подпапок И есть исходная директория
+    if (preserveSubfolders && sourceDirPath) {
+      // Вычисляем относительный путь от исходной директории до файла
+      const relativePath = path.relative(sourceDirPath, originalDir);
+
+      // Если относительный путь не пустой и не выходит за пределы исходной директории
+      if (relativePath && !relativePath.startsWith('..') && !path.isAbsolute(relativePath)) {
+        finalOutputDir = path.join(baseOutputDir, relativePath);
+      }
+    }
+
     // Обеспечиваем существование директории
+    const dirCreated = !fs.existsSync(finalOutputDir);
     try {
-      fs.ensureDirSync(saveDir);
-      console.log('Директория создана/проверена:', saveDir);
+      fs.ensureDirSync(finalOutputDir);
+      if (dirCreated) {
+        logger.dirCreated(finalOutputDir);
+      }
     } catch (error) {
-      console.error('Ошибка создания директории:', error);
+      logger.error('Ошибка создания директории', error.message);
       return null;
     }
-    
+
     // Формируем новое имя файла
     const newName = `${prefix || ''}${originalName}${newExt}`;
-    let outputPath = path.join(saveDir, newName);
-    
-    console.log('Полный путь сохранения:', outputPath);
-    
+    let outputPath = path.join(finalOutputDir, newName);
+
     // Обрабатываем политику перезаписи
     if (fs.existsSync(outputPath) && overwritePolicy !== 'overwrite') {
       if (overwritePolicy === 'skip') {
-        console.log('Файл пропущен (уже существует):', outputPath);
+        logger.fileSkipped(outputPath, 'уже существует');
         return null; // Пропускаем файл
       } else {
         // Добавляем числовой суффикс
         let counter = 1;
         let uniquePath = outputPath;
-        
+
         while (fs.existsSync(uniquePath)) {
-          uniquePath = path.join(saveDir, `${prefix || ''}${originalName}_${counter}${newExt}`);
+          uniquePath = path.join(finalOutputDir, `${prefix || ''}${originalName}_${counter}${newExt}`);
           counter++;
         }
-        
+
         outputPath = uniquePath;
-        console.log('Путь изменен для избежания перезаписи:', outputPath);
       }
     }
-    
+
     return outputPath;
   }
   

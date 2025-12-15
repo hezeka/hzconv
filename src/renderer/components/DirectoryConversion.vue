@@ -131,8 +131,11 @@
         </el-form-item>
         
         <div class="form-actions">
-          <el-button 
-            type="primary" 
+          <el-button @click="resetForm">
+            Сбросить
+          </el-button>
+          <el-button
+            type="primary"
             :disabled="!formData.dirPath || !formData.format"
             @click="startConversion"
           >
@@ -152,9 +155,10 @@
           </div>
         </div>
         
-        <el-progress 
-          :percentage="calculateProgress()" 
+        <el-progress
+          :percentage="calculateProgress()"
           :format="progressFormat"
+          :duration="0"
         />
         
         <div class="progress-actions">
@@ -176,8 +180,23 @@
   </template>
   
   <script>
-  import { ref, reactive, watch, computed } from 'vue';
+  import { ref, reactive, watch, computed, onMounted } from 'vue';
   import { ElMessage } from 'element-plus';
+
+  const STORAGE_KEY = 'directoryConversion_settings';
+  const DEFAULT_FORM_DATA = {
+    dirPath: '',
+    recursive: true,
+    preserveSubfolders: true,
+    format: '',
+    quality: 'medium',
+    saveOption: 'original',
+    subDir: 'converted',
+    outputDir: '',
+    prefix: '',
+    overwritePolicy: 'rename',
+    formatFilter: ''
+  };
   
   export default {
     props: {
@@ -198,31 +217,54 @@
     emits: ['conversion-start', 'conversion-complete', 'conversion-cancel'],
     
     setup(props, { emit }) {
-      const formData = reactive({
-        dirPath: '',
-        recursive: true,
-        preserveSubfolders: true,
-        format: '',
-        quality: 'medium',
-        saveOption: 'original',
-        subDir: 'converted',
-        outputDir: '',
-        prefix: '',
-        overwritePolicy: 'rename',
-        formatFilter: ''
-      });
-      
+      const formData = reactive({ ...DEFAULT_FORM_DATA });
+
       const directoryStats = reactive({
         totalFiles: 0
       });
-      
+
       const directoryProgress = reactive({
         currentFile: 0,
         totalFiles: 0,
         currentFilePath: ''
       });
-      
+
       const isConversionCancelled = ref(false);
+
+      // Загрузка сохранённых настроек из localStorage
+      const loadSavedSettings = () => {
+        try {
+          const saved = localStorage.getItem(STORAGE_KEY);
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            Object.assign(formData, parsed);
+          }
+        } catch (error) {
+          console.error('Ошибка загрузки настроек:', error);
+        }
+      };
+
+      // Сохранение настроек в localStorage
+      const saveSettings = () => {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(formData));
+        } catch (error) {
+          console.error('Ошибка сохранения настроек:', error);
+        }
+      };
+
+      // Сброс настроек к стандартным
+      const resetForm = () => {
+        Object.assign(formData, DEFAULT_FORM_DATA);
+        localStorage.removeItem(STORAGE_KEY);
+        directoryStats.totalFiles = 0;
+      };
+
+      // Автосохранение при изменении любого поля
+      watch(formData, saveSettings, { deep: true });
+
+      // Загрузка настроек при монтировании
+      onMounted(loadSavedSettings);
       
       // Форматирование прогресса
       const progressFormat = (percentage) => {
@@ -310,16 +352,24 @@
           ElMessage.warning('Выберите директорию для конвертации');
           return;
         }
-        
+
         if (!formData.format) {
           ElMessage.warning('Выберите формат для конвертации');
           return;
         }
-        
+
         try {
+          // ВАЖНО: Сначала очищаем прогресс
+          directoryProgress.currentFile = 0;
+          directoryProgress.totalFiles = 0;
+          directoryProgress.currentFilePath = '';
+
+          // Ждем следующий тик, чтобы DOM обновился
+          await new Promise(resolve => setTimeout(resolve, 0));
+
           // Получаем форматы для фильтрации
           const formats = getFormatsFromFilter();
-          
+
           // Готовим опции для конвертации
           const options = {
             format: formData.format,
@@ -328,27 +378,27 @@
             prefix: formData.prefix,
             preserveSubfolders: formData.preserveSubfolders
           };
-          
+
           // Устанавливаем директорию в зависимости от выбора
           if (formData.saveOption === 'subdir') {
             options.subDir = formData.subDir;
           } else if (formData.saveOption === 'custom' && formData.outputDir) {
             options.outputDir = formData.outputDir;
           }
-          
+
           // Сбрасываем состояние отмены
           isConversionCancelled.value = false;
-          
+
           // Сообщаем о начале конвертации
           emit('conversion-start');
-          
+
           // Настраиваем прием событий прогресса
           window.electronAPI.onDirectoryConversionProgress((data) => {
             directoryProgress.currentFile = data.currentFile;
             directoryProgress.totalFiles = data.totalFiles;
             directoryProgress.currentFilePath = data.filePath;
           });
-          
+
           // Запускаем конвертацию директории
           const result = await window.electronAPI.convertDirectory({
             dirPath: formData.dirPath,
@@ -356,19 +406,20 @@
             options,
             recursive: formData.recursive
           });
-          
+
           // Очищаем слушатель событий
           window.electronAPI.removeAllListeners();
-          
+
           // Обрабатываем результат
-          if (isConversionCancelled.value) {
+          if (isConversionCancelled.value || result.cancelledCount > 0) {
             ElMessage.warning('Конвертация была отменена пользователем');
           } else if (result.success) {
-            ElMessage.success(`Конвертация завершена: ${result.successCount} из ${result.totalFiles} файлов`);
+            const message = `Конвертация завершена: ${result.successCount} успешно${result.errorCount > 0 ? `, ${result.errorCount} ошибок` : ''}`;
+            ElMessage.success(message);
           } else {
             ElMessage.error(`Ошибка при конвертации директории: ${result.error || 'Неизвестная ошибка'}`);
           }
-          
+
           // Сообщаем о завершении
           emit('conversion-complete', result);
         } catch (error) {
@@ -379,9 +430,16 @@
       };
       
       // Отмена конвертации
-      const cancelConversion = () => {
-        isConversionCancelled.value = true;
-        emit('conversion-cancel');
+      const cancelConversion = async () => {
+        try {
+          isConversionCancelled.value = true;
+          await window.electronAPI.cancelConversion();
+          ElMessage.warning('Запрос на отмену конвертации отправлен');
+          emit('conversion-cancel');
+        } catch (error) {
+          console.error('Ошибка при отмене конвертации:', error);
+          ElMessage.error('Не удалось отменить конвертацию');
+        }
       };
       
       // Следим за изменениями параметров директории для обновления статистики
@@ -410,6 +468,7 @@
         selectOutputDir,
         startConversion,
         cancelConversion,
+        resetForm,
         calculateProgress,
         progressFormat,
         getFileName
@@ -474,7 +533,8 @@
 
   .form-actions {
     margin-top: 20px;
-    text-align: right;
+    display: flex;
+    justify-content: space-between;
   }
   </style>
   

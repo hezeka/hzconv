@@ -136,8 +136,11 @@
     </el-form>
     
     <div class="form-actions">
-      <el-button 
-        type="primary" 
+      <el-button @click="resetForm">
+        Сбросить
+      </el-button>
+      <el-button
+        type="primary"
         :disabled="files.length === 0 || !formData.format"
         @click="startConversion"
       >
@@ -148,8 +151,19 @@
 </template>
 
 <script>
-import { ref, reactive } from 'vue';
+import { ref, reactive, watch, onMounted } from 'vue';
 import { Delete } from '@element-plus/icons-vue';
+
+const STORAGE_KEY = 'conversionForm_settings';
+const DEFAULT_FORM_DATA = {
+  format: '',
+  quality: 'medium',
+  saveOption: 'original',
+  subDir: 'converted',
+  outputDir: '',
+  prefix: '',
+  overwritePolicy: 'rename'
+};
 
 export default {
   components: {
@@ -174,15 +188,41 @@ export default {
     const formRef = ref(null);
     
     // Форма с настройками конвертации
-    const formData = reactive({
-      format: '',
-      quality: 'medium',
-      saveOption: 'original',
-      subDir: 'converted',
-      outputDir: '',
-      prefix: '',
-      overwritePolicy: 'rename'
-    });
+    const formData = reactive({ ...DEFAULT_FORM_DATA });
+
+    // Загрузка сохранённых настроек из localStorage
+    const loadSavedSettings = () => {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          Object.assign(formData, parsed);
+        }
+      } catch (error) {
+        console.error('Ошибка загрузки настроек:', error);
+      }
+    };
+
+    // Сохранение настроек в localStorage
+    const saveSettings = () => {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(formData));
+      } catch (error) {
+        console.error('Ошибка сохранения настроек:', error);
+      }
+    };
+
+    // Сброс настроек к стандартным
+    const resetForm = () => {
+      Object.assign(formData, DEFAULT_FORM_DATA);
+      localStorage.removeItem(STORAGE_KEY);
+    };
+
+    // Автосохранение при изменении любого поля
+    watch(formData, saveSettings, { deep: true });
+
+    // Загрузка настроек при монтировании
+    onMounted(loadSavedSettings);
     
     // Выбор директории сохранения
     const selectOutputDir = async () => {
@@ -227,6 +267,7 @@ export default {
       formData,
       selectOutputDir,
       startConversion,
+      resetForm,
       getFileName
     };
   }
@@ -289,6 +330,7 @@ export default {
 
 .form-actions {
   margin-top: 20px;
-  text-align: right;
+  display: flex;
+  justify-content: space-between;
 }
 </style>

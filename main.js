@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs-extra');
 const { getFileType, getConverter, allSupportedFormats } = require('./src/main/converters');
 const FileManager = require('./src/main/utils/fileManager');
+const logger = require('./src/main/utils/logger');
 
 // В main.js в начале файла:
 const conversionController = require('./src/main/conversionController');
@@ -21,95 +22,98 @@ ipcMain.handle('cancel-conversion', () => {
 
 // Модифицируем функцию convertSingleFile
 async function convertSingleFile(filePath, options, baseDirPath = null) {
+  let converter = null;
+
   try {
     if (conversionController.isConversionCancelled()) {
-      return { 
-        success: false, 
+      return {
+        success: false,
         cancelled: true,
-        filePath 
+        filePath
       };
     }
-    
-    console.log('Конвертация файла:', filePath);
-    
+
     const fileType = getFileType(filePath);
-    
+
     if (!fileType) {
-      console.error(`Неподдерживаемый тип файла: ${filePath}`);
-      return { 
-        success: false, 
+      logger.error(`Неподдерживаемый тип файла: ${path.basename(filePath)}`);
+      return {
+        success: false,
         error: `Неподдерживаемый тип файла: ${path.basename(filePath)}`,
-        filePath 
+        filePath
       };
     }
-    
-    const converter = getConverter(fileType);
-    
+
+    converter = getConverter(fileType);
+
     // Используем baseDirPath при генерации пути для сохранения структуры папок
     const outputPath = FileManager.generateOutputPath(filePath, null, {
       ...options
     }, baseDirPath);
-    
+
     if (!outputPath) {
-      console.log(`Файл пропущен: ${filePath}`);
-      return { 
-        success: false, 
-        skipped: true, 
-        filePath 
+      // Файл уже был пропущен в FileManager с логированием
+      return {
+        success: false,
+        skipped: true,
+        filePath
       };
     }
-    
+
     // Добавляем обработчики событий
     converter.removeAllListeners();
-    
+
     converter.on('progress', (progress) => {
       conversionController.updateFileProgress(filePath, progress);
-      
+
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('conversion-progress', { 
-          filePath, 
-          progress 
+        mainWindow.webContents.send('conversion-progress', {
+          filePath,
+          progress
         });
       }
     });
-    
+
     converter.on('error', (error) => {
-      console.error('Ошибка в процессе конвертации:', error);
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('conversion-error', { 
-          filePath, 
-          error: error.message || 'Неизвестная ошибка' 
+        mainWindow.webContents.send('conversion-error', {
+          filePath,
+          error: error.message || 'Неизвестная ошибка'
         });
       }
     });
-    
-    // Регулярно проверяем, не была ли запрошена отмена
+
+    // Настраиваем проверку отмены
     const cancelCheckInterval = setInterval(() => {
       if (conversionController.isConversionCancelled()) {
         clearInterval(cancelCheckInterval);
-        converter.emit('error', new Error('Conversion cancelled'));
+        if (converter && typeof converter.cancel === 'function') {
+          converter.cancel();
+        }
       }
-    }, 500);
-    
+    }, 100); // Проверяем каждые 100ms
+
     try {
       // Запускаем конвертацию
-      console.log(`Начинаем конвертацию из ${filePath} в ${outputPath}`);
       const result = await converter.convert(filePath, outputPath, options);
-      
+
       clearInterval(cancelCheckInterval);
-      
+
       // Если конвертация была отменена во время выполнения
       if (conversionController.isConversionCancelled()) {
-        return { 
-          success: false, 
+        return {
+          success: false,
           cancelled: true,
-          filePath 
+          filePath
         };
       }
-      
+
+      // Логируем успешную конвертацию
+      logger.fileConverted(filePath, outputPath);
+
       // Сообщаем о завершении файла
       conversionController.fileCompleted(filePath, { success: true });
-      
+
       return {
         success: true,
         inputPath: filePath,
@@ -117,14 +121,24 @@ async function convertSingleFile(filePath, options, baseDirPath = null) {
       };
     } catch (error) {
       clearInterval(cancelCheckInterval);
+
+      // Если ошибка из-за отмены, не считаем это ошибкой
+      if (conversionController.isConversionCancelled()) {
+        return {
+          success: false,
+          cancelled: true,
+          filePath
+        };
+      }
+
       throw error;
     }
   } catch (error) {
-    console.error('Ошибка конвертации:', error);
-    return { 
-      success: false, 
+    logger.fileError(filePath, error.message);
+    return {
+      success: false,
       error: error.message || 'Неизвестная ошибка',
-      filePath 
+      filePath
     };
   }
 }
@@ -388,30 +402,47 @@ ipcMain.handle('window', async (event, command) => {
 // Конвертация нескольких файлов
 ipcMain.handle('convert-files', async (event, params) => {
   console.log('Received in main process:', params);
-  
+
   const { filePaths, options } = params;
-  
+
   if (!Array.isArray(filePaths) || filePaths.length === 0) {
     console.error('Invalid or empty filePaths:', filePaths);
     return [];
   }
-  
+
+  // Запускаем контроллер конвертации
+  conversionController.startConversion(filePaths.length);
+
   const results = [];
-  
+
   for (const filePath of filePaths) {
+    // Проверяем, не была ли запрошена отмена
+    if (conversionController.isConversionCancelled()) {
+      console.log('Конвертация файлов отменена пользователем');
+      results.push({
+        success: false,
+        cancelled: true,
+        filePath
+      });
+      continue;
+    }
+
     try {
       const result = await convertSingleFile(filePath, options);
       results.push(result);
     } catch (error) {
       console.error(`Error converting file ${filePath}:`, error);
-      results.push({ 
-        success: false, 
+      results.push({
+        success: false,
         error: error.message || 'Unknown error',
-        filePath 
+        filePath
       });
     }
   }
-  
+
+  // Завершаем конвертацию
+  conversionController.finishConversion(results);
+
   return results;
 });
 
@@ -439,23 +470,38 @@ ipcMain.handle('convert-directory', async (event, { dirPath, options, formats = 
   try {
     // Получаем список файлов из директории
     const filePaths = await FileManager.getFilesFromDirectory(dirPath, formats, recursive);
-    
+
     if (filePaths.length === 0) {
-      return { 
-        success: true, 
-        totalFiles: 0, 
+      logger.info('В директории не найдено подходящих файлов');
+      return {
+        success: true,
+        totalFiles: 0,
         successCount: 0,
         message: 'В директории не найдено подходящих файлов'
       };
     }
-    
+
+    // Логируем начало конвертации директории
+    logger.directoryStart(dirPath, filePaths.length);
+
+    // Запускаем контроллер конвертации
+    conversionController.startConversion(filePaths.length);
+
     let successCount = 0;
     let errorCount = 0;
-    
+    let cancelledCount = 0;
+
     // Конвертируем каждый файл
     for (let i = 0; i < filePaths.length; i++) {
+      // Проверяем, не была ли запрошена отмена
+      if (conversionController.isConversionCancelled()) {
+        logger.info('Конвертация директории отменена пользователем');
+        cancelledCount = filePaths.length - i;
+        break;
+      }
+
       const filePath = filePaths[i];
-      
+
       // Сообщаем о прогрессе
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('directory-conversion-progress', {
@@ -464,45 +510,74 @@ ipcMain.handle('convert-directory', async (event, { dirPath, options, formats = 
           filePath
         });
       }
-      
+
       try {
         const fileType = getFileType(filePath);
-        
+
         if (!fileType) {
-          console.log(`Пропускаем неподдерживаемый файл: ${filePath}`);
+          // Файл с неподдерживаемым типом уже залогирован
           continue;
         }
-        
+
         const converter = getConverter(fileType);
-        
+
         // Генерируем выходной путь с учетом сохранения структуры папок
         const outputPath = FileManager.generateOutputPath(filePath, dirPath, {
           ...options,
           format: options.format
         });
-        
+
         if (!outputPath) {
-          console.log(`Файл пропущен согласно настройкам: ${filePath}`);
+          // Файл уже был пропущен в FileManager с логированием
           continue;
         }
-        
+
+        // Добавляем обработчики событий
+        converter.removeAllListeners();
+
+        converter.on('progress', (progress) => {
+          conversionController.updateFileProgress(filePath, progress);
+        });
+
         // Запускаем конвертацию
         await converter.convert(filePath, outputPath, options);
+
+        // Если конвертация была отменена во время выполнения
+        if (conversionController.isConversionCancelled()) {
+          cancelledCount++;
+          break;
+        }
+
+        // Логируем успешную конвертацию
+        logger.fileConverted(filePath, outputPath);
+
         successCount++;
+        conversionController.fileCompleted(filePath, { success: true });
       } catch (fileError) {
-        console.error(`Ошибка при конвертации файла ${filePath}:`, fileError);
+        logger.fileError(filePath, fileError.message);
         errorCount++;
+        conversionController.fileCompleted(filePath, { success: false, error: fileError.message });
       }
     }
-    
-    return {
+
+    // Логируем завершение конвертации директории
+    logger.directoryComplete(successCount, errorCount, filePaths.length);
+
+    // Завершаем конвертацию
+    const finalResult = {
       success: true,
       totalFiles: filePaths.length,
       successCount,
-      errorCount
+      errorCount,
+      cancelledCount
     };
+
+    conversionController.finishConversion(finalResult);
+
+    return finalResult;
   } catch (error) {
-    console.error('Ошибка при конвертации директории:', error);
+    logger.error('Ошибка при конвертации директории', error.message);
+    conversionController.finishConversion({ success: false, error: error.message });
     return {
       success: false,
       error: error.message || 'Неизвестная ошибка'
