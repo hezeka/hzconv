@@ -1,24 +1,28 @@
 {
   "name": "hzconv",
   "version": "1.0.0",
-  "description": "Конвертер медиафайлов на основе Node.js и Electron",
+  "description": "Конвертер медиафайлов",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder",
+    "vite:build": "vite build",
+    "build": "npm run vite:build && electron-builder",
     "dev:electron": "cross-env NODE_ENV=development electron .",
     "dev:vue": "vite --port 8085",
     "dev": "concurrently \"npm run dev:vue\" \"npm run dev:electron\""
   },
   "build": {
-    "appId": "com.example.media-converter",
-    "productName": "Media Converter",
+    "appId": "com.example.hzconv",
+    "productName": "Hzconv",
+    "icon": "src/icon.png",
     "files": [
       "main.js",
       "preload.js",
       "dist/**/*",
       "src/main/**/*",
-      "node_modules/**/*"
+      "node_modules/**/*",
+      "src/icon.png",
+      "src/electron.css"
     ],
     "directories": {
       "output": "build"
@@ -40,7 +44,7 @@
     "ffmpeg",
     "sharp"
   ],
-  "author": "",
+  "author": "HZK",
   "license": "ISC",
   "dependencies": {
     "element-plus": "^2.3.0",

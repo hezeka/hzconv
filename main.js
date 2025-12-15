@@ -248,7 +248,7 @@ async function createWindow() {
       contextIsolation: true,
       nodeIntegration: false
     },
-    icon: path.join(__dirname, 'path/to/icon.png'),
+    icon: path.join(__dirname, 'src/icon.png'),
     autoHideMenuBar: true,
     transparent: true
   });
@@ -267,7 +267,7 @@ async function createWindow() {
     // mainWindow.webContents.openDevTools();
   } else {
     // В продакшне загружаем собранный HTML
-    mainWindow.loadFile(path.join(__dirname, 'dist', 'index.html'));
+    mainWindow.loadFile(path.join(__dirname, 'dist/index.html'));
   }
 
   // Обработчик закрытия окна
