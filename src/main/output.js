@@ -134,13 +134,22 @@ function tempPathFor(dir, ext) {
   return path.join(dir, `.hzconv-${crypto.randomBytes(5).toString('hex')}.part.${ext}`);
 }
 
+/**
+ * Удаление с повторами: на Windows только что остановленный ffmpeg или антивирус
+ * может ещё мгновение держать файл (EBUSY/EPERM).
+ */
+function removeQuiet(p) {
+  if (!p) return Promise.resolve();
+  return fs.promises.rm(p, { force: true, maxRetries: 8, retryDelay: 150 }).catch(() => {});
+}
+
 async function commitTemp(tempPath, finalPath) {
   try {
     await fs.move(tempPath, finalPath, { overwrite: true });
   } catch (error) {
-    await fs.remove(tempPath).catch(() => {});
+    await removeQuiet(tempPath);
     throw error;
   }
 }
 
-module.exports = { renderName, resolveOutputDir, templateNeedsSize, PathReserver, tempPathFor, commitTemp, today, isInside };
+module.exports = { renderName, resolveOutputDir, templateNeedsSize, PathReserver, tempPathFor, commitTemp, removeQuiet, today, isInside };

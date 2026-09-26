@@ -8,7 +8,7 @@ const EventEmitter = require('events');
 const { getFileType, extOf, resolveTarget, getOutputFormat, normalizeSettings } = require('./formats');
 const { readMeta, renderImage } = require('./pipeline/image');
 const { probeMedia, buildArgs, runFfmpeg, CancelError } = require('./pipeline/media');
-const { renderName, resolveOutputDir, templateNeedsSize, PathReserver, tempPathFor, commitTemp, today } = require('./output');
+const { renderName, resolveOutputDir, templateNeedsSize, PathReserver, tempPathFor, commitTemp, removeQuiet, today } = require('./output');
 const { toDataUrl } = require('./inspect');
 const logger = require('./utils/logger');
 
@@ -219,7 +219,7 @@ class Runner extends EventEmitter {
           .map(async (n) => {
             const p = path.join(dir, n);
             const st = await fs.stat(p).catch(() => null);
-            if (st && st.mtimeMs < stale) await fs.remove(p).catch(() => {});
+            if (st && st.mtimeMs < stale) await removeQuiet(p);
           })
       );
     } catch {
@@ -276,7 +276,7 @@ class Runner extends EventEmitter {
         outputs.push({ path: finalPath, size, width: r.width, height: r.height });
       } catch (error) {
         reserver.release(finalPath);
-        if (tmp) await fs.remove(tmp).catch(() => {});
+        await removeQuiet(tmp);
         throw error;
       }
       this.reportProgress(item.id, (i + 1) / variants.length);
@@ -333,7 +333,7 @@ class Runner extends EventEmitter {
       if (!finalPath) {
         finalPath = reserver.claim(dir, renderName(tpl, { ...vars, w: width, h: height }), plan.target.ext, settings.output.conflict, st.mtimeMs);
         if (!finalPath) {
-          await fs.remove(tmp);
+          await removeQuiet(tmp);
           return { outputs: [] };
         }
       }
@@ -341,10 +341,10 @@ class Runner extends EventEmitter {
       return { outputs: [{ path: finalPath, size, width, height }] };
     } catch (error) {
       reserver.release(finalPath);
-      await fs.remove(tmp).catch(() => {});
+      await removeQuiet(tmp);
       throw error;
     } finally {
-      if (palette) await fs.remove(palette).catch(() => {});
+      await removeQuiet(palette);
     }
   }
 }

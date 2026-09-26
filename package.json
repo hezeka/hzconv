@@ -13,9 +13,10 @@
     "test": "node --test test/*.test.js"
   },
   "build": {
-    "appId": "com.example.hzconv",
+    "appId": "io.github.hezeka.hzconv",
     "productName": "Hzconv",
     "icon": "src/icon.png",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "files": [
       "main.js",
       "preload.js",
@@ -25,28 +26,42 @@
       "src/icon.png",
       "package.json"
     ],
-    "directories": {
-      "output": "build"
-    },
-    "win": {
-      "target": "nsis"
-    },
-    "mac": {
-      "target": "dmg"
-    },
-    "linux": {
-      "target": "AppImage"
-    },
     "asarUnpack": [
       "**/node_modules/sharp/**/*",
       "**/node_modules/@img/**/*",
       "**/node_modules/ffmpeg-static/**/*",
       "**/node_modules/@ffprobe-installer/**/*"
     ],
+    "directories": {
+      "output": "build"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
-    }
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.graphics-design"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Graphics"
+    },
+    "publish": null
   },
   "keywords": [
     "electron",
@@ -78,5 +93,10 @@
   },
   "engines": {
     "node": ">=20.9.0"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hezeka/hzconv.git"
+  },
+  "homepage": "https://github.com/hezeka/hzconv"
 }
