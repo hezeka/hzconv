@@ -117,39 +117,146 @@ class FileManager {
   }
   
   /**
+   * Получает список подпапок в директории
+   * @param {string} dirPath - Путь к директории
+   * @param {boolean} recursive - Рекурсивный поиск вложенных папок
+   * @returns {Array} - Массив объектов { path, name, relativePath, depth, fileCount }
+   */
+  static async getSubfolders(dirPath, recursive = false) {
+    try {
+      const result = [];
+
+      // Оптимизированный подсчёт файлов в папке (параллельный)
+      const countFilesInDir = async (dir) => {
+        try {
+          const items = await fs.readdir(dir, { withFileTypes: true });
+          // withFileTypes возвращает Dirent объекты, что быстрее чем вызывать stat для каждого файла
+          return items.filter(item => item.isFile()).length;
+        } catch {
+          return 0;
+        }
+      };
+
+      const processDirectory = async (currentDir, depth = 0) => {
+        const items = await fs.readdir(currentDir, { withFileTypes: true });
+
+        // Собираем промисы для параллельного подсчета файлов
+        const folderPromises = [];
+        const folderData = [];
+
+        for (const item of items) {
+          if (item.isDirectory()) {
+            const itemPath = path.join(currentDir, item.name);
+            const relativePath = path.relative(dirPath, itemPath);
+
+            folderData.push({
+              itemPath,
+              name: item.name,
+              relativePath,
+              depth
+            });
+
+            // Запускаем подсчет файлов параллельно
+            folderPromises.push(countFilesInDir(itemPath));
+          }
+        }
+
+        // Ждем завершения всех подсчетов параллельно
+        const fileCounts = await Promise.all(folderPromises);
+
+        // Добавляем результаты
+        for (let i = 0; i < folderData.length; i++) {
+          const { itemPath, name, relativePath, depth } = folderData[i];
+          result.push({
+            path: itemPath,
+            name,
+            relativePath,
+            depth,
+            fileCount: fileCounts[i]
+          });
+
+          // Рекурсивно обрабатываем подпапки
+          if (recursive) {
+            await processDirectory(itemPath, depth + 1);
+          }
+        }
+      };
+
+      await processDirectory(dirPath);
+      return result;
+    } catch (error) {
+      console.error('Ошибка получения подпапок:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Получает список файлов из директории с фильтрацией по форматам
    * @param {string} dirPath - Путь к директории
    * @param {Array} formats - Массив форматов для фильтрации
    * @param {boolean} recursive - Рекурсивный поиск во вложенных папках
+   * @param {Array} selectedSubfolders - Массив путей выбранных подпапок (если пустой - все)
    * @returns {Array} - Массив путей к файлам
    */
-  static async getFilesFromDirectory(dirPath, formats = [], recursive = false) {
+  static async getFilesFromDirectory(dirPath, formats = [], recursive = false, selectedSubfolders = []) {
     try {
       const result = [];
-      
+      const hasSubfolderFilter = selectedSubfolders.length > 0;
+
+      // Проверяет, находится ли путь в одной из выбранных подпапок
+      const isInSelectedSubfolder = (filePath) => {
+        if (!hasSubfolderFilter) return true;
+        const fileDir = path.dirname(filePath);
+        // Проверяем, начинается ли путь файла с одной из выбранных подпапок
+        return selectedSubfolders.some(subPath =>
+          fileDir === subPath || fileDir.startsWith(subPath + path.sep)
+        );
+      };
+
       // Функция для рекурсивного обхода директорий
       const processDirectory = async (currentDir) => {
-        const items = await fs.readdir(currentDir);
-        
-        for (const item of items) {
-          const itemPath = path.join(currentDir, item);
-          const stat = await fs.stat(itemPath);
-          
-          if (stat.isDirectory()) {
-            if (recursive) {
-              await processDirectory(itemPath);
-            }
-          } else if (stat.isFile()) {
-            const ext = path.extname(itemPath).toLowerCase().substring(1);
-            
-            // Если форматы не указаны или файл соответствует одному из форматов
-            if (formats.length === 0 || formats.includes(ext)) {
-              result.push(itemPath);
+        try {
+          const items = await fs.readdir(currentDir);
+
+          for (const item of items) {
+            const itemPath = path.join(currentDir, item);
+
+            try {
+              const stat = await fs.stat(itemPath);
+
+              if (stat.isDirectory()) {
+                if (recursive) {
+                  // Если есть фильтр подпапок, проверяем нужно ли заходить в эту папку
+                  if (hasSubfolderFilter) {
+                    const shouldProcess = selectedSubfolders.some(subPath =>
+                      subPath === itemPath || subPath.startsWith(itemPath + path.sep) || itemPath.startsWith(subPath + path.sep)
+                    );
+                    if (shouldProcess) {
+                      await processDirectory(itemPath);
+                    }
+                  } else {
+                    await processDirectory(itemPath);
+                  }
+                }
+              } else if (stat.isFile()) {
+                const ext = path.extname(itemPath).toLowerCase().substring(1);
+
+                // Проверяем формат и принадлежность к выбранным подпапкам
+                if ((formats.length === 0 || formats.includes(ext)) && isInSelectedSubfolder(itemPath)) {
+                  result.push(itemPath);
+                }
+              }
+            } catch (itemError) {
+              // Пропускаем недоступные файлы/папки (защищённые, удалённые и т.д.)
+              console.debug(`Пропущен недоступный элемент: ${itemPath}`);
             }
           }
+        } catch (dirError) {
+          // Пропускаем недоступные директории (нет прав доступа и т.д.)
+          console.debug(`Пропущена недоступная директория: ${currentDir}`);
         }
       };
-      
+
       await processDirectory(dirPath);
       return result;
     } catch (error) {

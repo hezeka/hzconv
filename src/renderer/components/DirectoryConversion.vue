@@ -19,6 +19,22 @@
               <el-checkbox v-model="formData.preserveSubfolders">Сохранять структуру папок</el-checkbox>
             </el-col>
           </el-row>
+          <el-button
+            v-if="formData.recursive && formData.dirPath"
+            size="small"
+            style="margin-top: 8px"
+            :loading="isLoadingSubfolders"
+            :disabled="isLoadingSubfolders || availableSubfolders.length === 0"
+            @click="openSubfolderDialog"
+          >
+            <span v-if="isLoadingSubfolders">Анализ папок...</span>
+            <span v-else>
+              {{ selectedSubfolders.length > 0 ? 'Изменить подпапки' : 'Выбрать подпапки' }}
+              <span v-if="selectedSubfolders.length > 0" class="subfolder-count">
+                ({{ selectedSubfolders.length }})
+              </span>
+            </span>
+          </el-button>
         </el-form-item>
         
         <!-- Фильтр файлов -->
@@ -176,6 +192,60 @@
           show-icon
         />
       </div>
+
+      <!-- Диалог выбора подпапок -->
+      <el-dialog
+        v-model="subfolderDialogVisible"
+        title="Выбор подпапок"
+        width="500px"
+      >
+        <div class="subfolder-dialog-content">
+          <!-- Поле поиска -->
+          <el-input
+            v-model="subfolderSearchQuery"
+            placeholder="Введите название папки. Используйте * как подстановочный знак"
+            clearable
+            class="subfolder-search"
+          >
+            <template #prefix>
+              <span style="    color: rgb(144 147 153 / 47%);font-size: 18px;transform: translateY(-1px);">⌕</span>
+            </template>
+          </el-input>
+
+          <div class="subfolder-master">
+            <el-checkbox
+              v-model="allSubfoldersSelected"
+              :indeterminate="isIndeterminate"
+              @change="handleSelectAll"
+            >
+              Выбрать все ({{ filteredSubfolders.length }})
+            </el-checkbox>
+          </div>
+
+          <div v-if="filteredSubfolders.length === 0" class="no-results">
+            Папки не найдены
+          </div>
+
+          <el-scrollbar v-else max-height="300px">
+            <el-checkbox-group v-model="selectedSubfolders" class="subfolder-list">
+              <div
+                v-for="folder in filteredSubfolders"
+                :key="folder.path"
+                class="subfolder-item"
+                :style="{ paddingLeft: (folder.depth * 16) + 'px' }"
+              >
+                <el-checkbox :value="folder.path">
+                  {{ folder.name }}
+                </el-checkbox>
+              </div>
+            </el-checkbox-group>
+          </el-scrollbar>
+        </div>
+        <template #footer>
+          <el-button @click="clearSubfolderSelection">Сбросить выбор</el-button>
+          <el-button type="primary" @click="subfolderDialogVisible = false">Готово</el-button>
+        </template>
+      </el-dialog>
     </div>
   </template>
   
@@ -231,13 +301,80 @@
 
       const isConversionCancelled = ref(false);
 
+      // Состояние для выбора подпапок (НЕ сохраняется в localStorage)
+      const availableSubfolders = ref([]);
+      const selectedSubfolders = ref([]);
+      const subfolderDialogVisible = ref(false);
+      const isLoadingSubfolders = ref(false);
+      const subfolderSearchQuery = ref('');
+
+      // Computed для мастер-чекбокса
+      const allSubfoldersSelected = computed({
+        get: () => availableSubfolders.value.length > 0 &&
+                   selectedSubfolders.value.length === availableSubfolders.value.length,
+        set: () => {}
+      });
+
+      const isIndeterminate = computed(() =>
+        selectedSubfolders.value.length > 0 &&
+        selectedSubfolders.value.length < availableSubfolders.value.length
+      );
+
+      // Функция для поиска папок
+      const matchesPattern = (text, pattern) => {
+        // Если в паттерне нет звёздочки, ищем просто подстроку (нечувствительно к регистру)
+        if (!pattern.includes('*')) {
+          return text.toLowerCase().includes(pattern.toLowerCase());
+        }
+
+        // Если есть звёздочка, используем регулярное выражение
+        const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(escaped.replace(/\*/g, '.*'), 'i');
+        return regex.test(text);
+      };
+
+      // Фильтрованный список подпапок
+      const filteredSubfolders = computed(() => {
+        if (!subfolderSearchQuery.value.trim()) {
+          return availableSubfolders.value;
+        }
+
+        const query = subfolderSearchQuery.value.trim();
+
+        return availableSubfolders.value.filter(folder => {
+          // Ищем в названии папки или в полном пути
+          return matchesPattern(folder.name, query) || matchesPattern(folder.relativePath, query);
+        });
+      });
+
+      // Защита от спама ошибок
+      const lastErrorMessage = ref('');
+      const lastErrorTime = ref(0);
+      const analyzeDebounceTimer = ref(null);
+
+      const showError = (message) => {
+        const now = Date.now();
+        // Не показываем ту же ошибку если прошло меньше 3 секунд
+        if (message === lastErrorMessage.value && now - lastErrorTime.value < 3000) {
+          return;
+        }
+        lastErrorMessage.value = message;
+        lastErrorTime.value = now;
+        ElMessage.error(message);
+      };
+
       // Загрузка сохранённых настроек из localStorage
-      const loadSavedSettings = () => {
+      const loadSavedSettings = async () => {
         try {
           const saved = localStorage.getItem(STORAGE_KEY);
           if (saved) {
             const parsed = JSON.parse(saved);
             Object.assign(formData, parsed);
+
+            // Если была выбрана директория и включены подпапки - загружаем их
+            if (formData.dirPath && formData.recursive) {
+              await loadSubfolders();
+            }
           }
         } catch (error) {
           console.error('Ошибка загрузки настроек:', error);
@@ -258,13 +395,92 @@
         Object.assign(formData, DEFAULT_FORM_DATA);
         localStorage.removeItem(STORAGE_KEY);
         directoryStats.totalFiles = 0;
+        availableSubfolders.value = [];
+        selectedSubfolders.value = [];
+      };
+
+      // Загрузка подпапок
+      const loadSubfolders = async () => {
+        if (!formData.dirPath || !formData.recursive) {
+          availableSubfolders.value = [];
+          selectedSubfolders.value = [];
+          return;
+        }
+
+        try {
+          isLoadingSubfolders.value = true;
+
+          // Устанавливаем таймаут на 60 секунд для больших директорий
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('timeout')), 60000)
+          );
+
+          const subfolders = await Promise.race([
+            window.electronAPI.getSubfolders({
+              dirPath: formData.dirPath,
+              recursive: true
+            }),
+            timeoutPromise
+          ]);
+
+          // Добавляем виртуальную папку для корневых файлов
+          availableSubfolders.value = [
+            {
+              path: formData.dirPath,
+              name: '📁 Файлы в корне',
+              relativePath: '',
+              depth: 0,
+              fileCount: 0,
+              isRoot: true
+            },
+            ...subfolders
+          ];
+
+          // Сбрасываем выбор при загрузке новых подпапок
+          selectedSubfolders.value = [];
+        } catch (error) {
+          console.error('Ошибка загрузки подпапок:', error);
+          availableSubfolders.value = [];
+
+          if (error.message === 'timeout') {
+            showError('Анализ папок занял слишком долго. Возможно, в директории очень много папок');
+          } else {
+            showError('Не удалось загрузить список подпапок');
+          }
+        } finally {
+          isLoadingSubfolders.value = false;
+        }
+      };
+
+      // Открытие диалога выбора подпапок
+      const openSubfolderDialog = () => {
+        subfolderSearchQuery.value = ''; // Очищаем строку поиска при открытии
+        subfolderDialogVisible.value = true;
+      };
+
+      // Выбор/снятие всех подпапок
+      const handleSelectAll = (val) => {
+        if (val) {
+          selectedSubfolders.value = availableSubfolders.value.map(f => f.path);
+        } else {
+          selectedSubfolders.value = [];
+        }
+      };
+
+      // Сброс выбора подпапок (будут конвертироваться все)
+      const clearSubfolderSelection = () => {
+        selectedSubfolders.value = [];
       };
 
       // Автосохранение при изменении любого поля
       watch(formData, saveSettings, { deep: true });
 
       // Загрузка настроек при монтировании
-      onMounted(loadSavedSettings);
+      onMounted(async () => {
+        await loadSavedSettings();
+        // Не вызываем анализ при загрузке - подождём пока пользователь выберет опции
+        // Анализ будет вызван через watch при изменении параметров
+      });
       
       // Форматирование прогресса
       const progressFormat = (percentage) => {
@@ -281,14 +497,15 @@
       const selectDirectory = async () => {
         try {
           const dirPath = await window.electronAPI.openDirectoryDialog();
-          
+
           if (dirPath) {
             formData.dirPath = dirPath;
-            await analyzeDirectory();
+            await loadSubfolders();
+            await analyzeDirectoryInternal(); // Напрямую без дебаунса
           }
         } catch (error) {
           console.error('Ошибка при выборе директории:', error);
-          ElMessage.error('Не удалось выбрать директорию');
+          showError('Не удалось выбрать директорию');
         }
       };
       
@@ -296,40 +513,49 @@
       const selectOutputDir = async () => {
         try {
           const dirPath = await window.electronAPI.openDirectoryDialog();
-          
+
           if (dirPath) {
             formData.outputDir = dirPath;
           }
         } catch (error) {
           console.error('Ошибка при выборе директории сохранения:', error);
-          ElMessage.error('Не удалось выбрать директорию сохранения');
+          showError('Не удалось выбрать директорию сохранения');
         }
       };
       
-      // Анализ директории для отображения статистики
-      const analyzeDirectory = async () => {
+      // Анализ директории для отображения статистики (внутренняя функция)
+      const analyzeDirectoryInternal = async () => {
         if (!formData.dirPath) return;
-        
+
         try {
           // Получаем форматы для фильтрации
           const formats = getFormatsFromFilter();
-          
+
           // Получаем список файлов из директории для статистики
           const files = await window.electronAPI.getFilesFromDirectory({
             dirPath: formData.dirPath,
             formats,
-            recursive: formData.recursive
+            recursive: formData.recursive,
+            selectedSubfolders: [...selectedSubfolders.value] // Копируем массив
           });
-          
+
           directoryStats.totalFiles = files.length;
-          
-          if (files.length === 0) {
-            ElMessage.warning('В выбранной директории не найдено подходящих файлов');
-          }
+          // Сбрасываем ошибку при успехе
+          lastErrorMessage.value = '';
         } catch (error) {
           console.error('Ошибка при анализе директории:', error);
-          ElMessage.error('Не удалось проанализировать директорию');
+          showError('Не удалось проанализировать директорию');
         }
+      };
+
+      // Дебаунсированная версия analyzeDirectory
+      const analyzeDirectory = () => {
+        if (analyzeDebounceTimer.value) {
+          clearTimeout(analyzeDebounceTimer.value);
+        }
+        analyzeDebounceTimer.value = setTimeout(() => {
+          analyzeDirectoryInternal();
+        }, 300);
       };
       
       // Получение списка форматов из поля фильтра
@@ -404,7 +630,8 @@
             dirPath: formData.dirPath,
             formats,
             options,
-            recursive: formData.recursive
+            recursive: formData.recursive,
+            selectedSubfolders: [...selectedSubfolders.value] // Копируем массив
           });
 
           // Очищаем слушатель событий
@@ -417,18 +644,18 @@
             const message = `Конвертация завершена: ${result.successCount} успешно${result.errorCount > 0 ? `, ${result.errorCount} ошибок` : ''}`;
             ElMessage.success(message);
           } else {
-            ElMessage.error(`Ошибка при конвертации директории: ${result.error || 'Неизвестная ошибка'}`);
+            showError(`Ошибка при конвертации: ${result.error || 'Неизвестная ошибка'}`);
           }
 
           // Сообщаем о завершении
           emit('conversion-complete', result);
         } catch (error) {
           console.error('Ошибка при конвертации директории:', error);
-          ElMessage.error('Ошибка при конвертации директории');
+          showError('Ошибка при конвертации директории');
           emit('conversion-complete', { success: false, error: error.message });
         }
       };
-      
+
       // Отмена конвертации
       const cancelConversion = async () => {
         try {
@@ -438,20 +665,35 @@
           emit('conversion-cancel');
         } catch (error) {
           console.error('Ошибка при отмене конвертации:', error);
-          ElMessage.error('Не удалось отменить конвертацию');
+          showError('Не удалось отменить конвертацию');
         }
       };
       
+      // При изменении recursive перезагружаем подпапки
+      watch(() => formData.recursive, async (newVal, oldVal) => {
+        if (newVal === oldVal) return;
+        if (newVal && formData.dirPath) {
+          await loadSubfolders();
+        } else {
+          availableSubfolders.value = [];
+          selectedSubfolders.value = [];
+        }
+        analyzeDirectory();
+      });
+
       // Следим за изменениями параметров директории для обновления статистики
-      watch([
-        () => formData.dirPath,
-        () => formData.recursive,
-        () => formData.formatFilter
-      ], async () => {
+      watch(() => formData.formatFilter, () => {
         if (formData.dirPath) {
-          await analyzeDirectory();
+          analyzeDirectory();
         }
       });
+
+      // При изменении выбранных подпапок пересчитываем статистику (с дебаунсом)
+      watch(selectedSubfolders, () => {
+        if (formData.dirPath) {
+          analyzeDirectory();
+        }
+      }, { deep: true });
       
       // Вспомогательные функции
       const getFileName = (filePath) => {
@@ -464,11 +706,22 @@
         directoryStats,
         directoryProgress,
         isConversionCancelled,
+        availableSubfolders,
+        selectedSubfolders,
+        subfolderDialogVisible,
+        isLoadingSubfolders,
+        subfolderSearchQuery,
+        filteredSubfolders,
+        allSubfoldersSelected,
+        isIndeterminate,
         selectDirectory,
         selectOutputDir,
         startConversion,
         cancelConversion,
         resetForm,
+        openSubfolderDialog,
+        handleSelectAll,
+        clearSubfolderSelection,
         calculateProgress,
         progressFormat,
         getFileName
@@ -535,6 +788,41 @@
     margin-top: 20px;
     display: flex;
     justify-content: space-between;
+  }
+
+  .subfolder-count {
+    color: #409eff;
+    font-weight: 500;
+  }
+
+  .subfolder-dialog-content {
+    min-height: 100px;
+  }
+
+  .subfolder-master {
+    padding-bottom: 10px;
+    border-bottom: 1px solid #ebeef5;
+    margin-bottom: 10px;
+  }
+
+  .subfolder-list {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .subfolder-item {
+    padding: 6px 0;
+  }
+
+  .subfolder-search {
+    margin-bottom: 12px;
+  }
+
+  .no-results {
+    padding: 20px;
+    text-align: center;
+    color: #909399;
+    font-size: 14px;
   }
   </style>
   

@@ -449,13 +449,14 @@ ipcMain.handle('convert-files', async (event, params) => {
 
 
 // Получение файлов из директории
-ipcMain.handle('get-files-from-directory', async (event, { dirPath, formats = [], recursive = false }) => {
+ipcMain.handle('get-files-from-directory', async (event, { dirPath, formats = [], recursive = false, selectedSubfolders = [] }) => {
   try {
     console.log(`Запрос на получение файлов из директории: ${dirPath}`);
     console.log(`Форматы: ${formats.join(', ')}`);
     console.log(`Рекурсивно: ${recursive}`);
-    
-    const files = await FileManager.getFilesFromDirectory(dirPath, formats, recursive);
+    console.log(`Выбранные подпапки: ${selectedSubfolders.length > 0 ? selectedSubfolders.join(', ') : 'все'}`);
+
+    const files = await FileManager.getFilesFromDirectory(dirPath, formats, recursive, selectedSubfolders);
     return files;
   } catch (error) {
     console.error('Ошибка при получении файлов из директории:', error);
@@ -463,13 +464,24 @@ ipcMain.handle('get-files-from-directory', async (event, { dirPath, formats = []
   }
 });
 
+// Получение списка подпапок
+ipcMain.handle('get-subfolders', async (event, { dirPath, recursive = false }) => {
+  try {
+    const subfolders = await FileManager.getSubfolders(dirPath, recursive);
+    return subfolders;
+  } catch (error) {
+    console.error('Ошибка при получении подпапок:', error);
+    throw error;
+  }
+});
+
 
 
 // Модифицируем функцию для конвертации директории
-ipcMain.handle('convert-directory', async (event, { dirPath, options, formats = [], recursive = false }) => {
+ipcMain.handle('convert-directory', async (event, { dirPath, options, formats = [], recursive = false, selectedSubfolders = [] }) => {
   try {
     // Получаем список файлов из директории
-    const filePaths = await FileManager.getFilesFromDirectory(dirPath, formats, recursive);
+    const filePaths = await FileManager.getFilesFromDirectory(dirPath, formats, recursive, selectedSubfolders);
 
     if (filePaths.length === 0) {
       logger.info('В директории не найдено подходящих файлов');

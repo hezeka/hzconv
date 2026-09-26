@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Работа с директориями
   getFilesFromDirectory: (params) => ipcRenderer.invoke('get-files-from-directory', params),
+  getSubfolders: (params) => ipcRenderer.invoke('get-subfolders', params),
   convertDirectory: (params) => ipcRenderer.invoke('convert-directory', params),
   
   // События для обработки директорий
