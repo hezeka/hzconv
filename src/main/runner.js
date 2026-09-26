@@ -117,6 +117,7 @@ class Runner extends EventEmitter {
     this.cancelled = false;
     this.jobs.clear();
     this.finals.clear();
+    this.cleaned = new Set();
 
     const reserver = new PathReserver();
     const startedAt = Date.now();
@@ -159,7 +160,7 @@ class Runner extends EventEmitter {
         const result = job.plan.engine === 'sharp' ? await this.runImage(job, settings, reserver, st) : await this.runMedia(job, settings, reserver, st);
         if (!result.outputs.length) {
           summary.skipped++;
-          this.update(item.id, { status: 'skipped', reason: 'Файл уже существует', elapsed: Date.now() - t0 });
+          this.update(item.id, { status: 'skipped', reason: settings.output.conflict === 'newer' ? 'Результат актуален' : 'Файл уже существует', elapsed: Date.now() - t0 });
           return;
         }
         const outBytes = result.outputs.reduce((a, o) => a + o.size, 0);
@@ -201,6 +202,31 @@ class Runner extends EventEmitter {
     return summary;
   }
 
+  /**
+   * Готовит папку результата. При первом обращении за запуск убирает временные файлы,
+   * оставшиеся после аварийного завершения (старше 10 минут, чтобы не задеть параллельные запуски).
+   */
+  async prepareDir(dir) {
+    await fs.ensureDir(dir);
+    if (this.cleaned.has(dir)) return;
+    this.cleaned.add(dir);
+    try {
+      const names = await fs.readdir(dir);
+      const stale = Date.now() - 10 * 60 * 1000;
+      await Promise.all(
+        names
+          .filter((n) => /^\.hzconv-[0-9a-f]+\.part\./.test(n))
+          .map(async (n) => {
+            const p = path.join(dir, n);
+            const st = await fs.stat(p).catch(() => null);
+            if (st && st.mtimeMs < stale) await fs.remove(p).catch(() => {});
+          })
+      );
+    } catch {
+      /* не критично */
+    }
+  }
+
   checkCancel() {
     if (this.cancelled) throw new CancelError();
   }
@@ -213,11 +239,11 @@ class Runner extends EventEmitter {
 
   async runImage(job, settings, reserver, st) {
     const { item, plan, index } = job;
-    const meta = await readMeta(item.path);
+    let meta = null; // читаем лениво: актуальные файлы пропускаются без декодирования
     const fmt = getOutputFormat('image', plan.target.id);
     const target = { id: plan.target.id, alpha: fmt.alpha, animated: fmt.animated };
     const dir = resolveOutputDir(item, settings.output);
-    await fs.ensureDir(dir);
+    await this.prepareDir(dir);
 
     const variants = variantsFor(plan, settings);
     const name = path.basename(item.path, path.extname(item.path));
@@ -231,15 +257,16 @@ class Runner extends EventEmitter {
       const vars = { name, suffix: variant.suffix, n: index + 1, date: today(), fmt: plan.target.ext };
       let finalPath = null;
       if (!lateName) {
-        finalPath = reserver.claim(dir, renderName(tpl, vars), plan.target.ext, settings.output.conflict);
+        finalPath = reserver.claim(dir, renderName(tpl, vars), plan.target.ext, settings.output.conflict, st.mtimeMs);
         if (!finalPath) continue;
       }
       let tmp = null;
       try {
+        if (!meta) meta = await readMeta(item.path);
         const r = await renderImage(item.path, meta, settings.image, item.edit, target, variant.params);
         this.checkCancel();
         if (!finalPath) {
-          finalPath = reserver.claim(dir, renderName(tpl, { ...vars, w: r.width, h: r.height }), plan.target.ext, settings.output.conflict);
+          finalPath = reserver.claim(dir, renderName(tpl, { ...vars, w: r.width, h: r.height }), plan.target.ext, settings.output.conflict, st.mtimeMs);
           if (!finalPath) continue;
         }
         tmp = tempPathFor(dir, plan.target.ext);
@@ -262,7 +289,7 @@ class Runner extends EventEmitter {
     const info = await probeMedia(item.path);
     const args = buildArgs({ kind: plan.kind, targetId: plan.target.id, settings, edit: item.edit, info });
     const dir = resolveOutputDir(item, settings.output);
-    await fs.ensureDir(dir);
+    await this.prepareDir(dir);
 
     const name = path.basename(item.path, path.extname(item.path));
     const tpl = settings.output.template;
@@ -270,7 +297,7 @@ class Runner extends EventEmitter {
     const lateName = templateNeedsSize(tpl);
     let finalPath = null;
     if (!lateName) {
-      finalPath = reserver.claim(dir, renderName(tpl, vars), plan.target.ext, settings.output.conflict);
+      finalPath = reserver.claim(dir, renderName(tpl, vars), plan.target.ext, settings.output.conflict, st.mtimeMs);
       if (!finalPath) return { outputs: [] };
     }
 
@@ -304,7 +331,7 @@ class Runner extends EventEmitter {
         height = outInfo?.height || null;
       }
       if (!finalPath) {
-        finalPath = reserver.claim(dir, renderName(tpl, { ...vars, w: width, h: height }), plan.target.ext, settings.output.conflict);
+        finalPath = reserver.claim(dir, renderName(tpl, { ...vars, w: width, h: height }), plan.target.ext, settings.output.conflict, st.mtimeMs);
         if (!finalPath) {
           await fs.remove(tmp);
           return { outputs: [] };

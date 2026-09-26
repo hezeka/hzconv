@@ -1,9 +1,16 @@
 <template>
-  <div class="app" :class="`os-${platform}`">
+  <div class="app" :class="[`os-${platform}`, { 'is-compact': ui.compact, 'is-narrow': ui.narrow }]">
     <TitleBar />
     <main class="workspace">
-      <QueuePanel class="workspace__queue" />
-      <Inspector class="workspace__inspector" />
+      <div class="workspace__main">
+        <QueuePanel v-if="ui.mode === 'files'" class="workspace__panel" />
+        <BatchPanel v-else class="workspace__panel" />
+        <CompactBar v-if="ui.compact" />
+      </div>
+      <Transition name="fade">
+        <div v-if="ui.compact && ui.settingsOpen" class="drawer-scrim" @click="ui.settingsOpen = false" />
+      </Transition>
+      <Inspector class="workspace__inspector" :class="{ 'is-drawer': ui.compact, 'is-open': ui.settingsOpen }" />
     </main>
 
     <Transition name="fade">
@@ -29,11 +36,14 @@ import { onBeforeUnmount, onMounted } from 'vue';
 import { api, platform } from './api';
 import { ui, applyTheme } from './store/ui';
 import { queue, addPaths, removeItem, startConversion, cancelConversion, selectedItem, visibleItems } from './store/queue';
+import { batch, createJob, runJob } from './store/batch';
 import { toast } from './store/toast';
 import { useAddActions } from './composables/useAddActions';
 import Icon from './components/ui/Icon.vue';
 import TitleBar from './components/TitleBar.vue';
 import QueuePanel from './components/QueuePanel.vue';
+import BatchPanel from './components/BatchPanel.vue';
+import CompactBar from './components/CompactBar.vue';
 import Inspector from './components/Inspector.vue';
 import CropEditor from './components/CropEditor.vue';
 import PreviewModal from './components/PreviewModal.vue';
@@ -66,11 +76,20 @@ async function onDrop(e) {
   dragDepth = 0;
   ui.dragging = false;
   const paths = [...(e.dataTransfer?.files || [])].map((f) => api.pathForFile(f)).filter(Boolean);
-  if (paths.length) await addPaths(paths, { recursive: true });
+  if (!paths.length || queue.running || batch.running) return;
+  // В пакетном режиме одна папка становится папкой задания.
+  if (ui.mode === 'batch' && paths.length === 1 && (await api.pathKind(paths[0])) === 'dir') {
+    const job = await createJob(paths[0]);
+    if (job) toast(`Задание «${job.name}»`, { kind: 'ok' });
+    return;
+  }
+  if (ui.mode === 'batch') ui.mode = 'files';
+  await addPaths(paths, { recursive: true });
 }
 
 // ——— Горячие клавиши ———
 const modalOpen = () => ui.cropId || ui.previewId || ui.folderImport || ui.presetDialog || ui.shortcuts;
+const busy = () => queue.running || batch.running;
 const isTyping = (e) => ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target?.tagName) || e.target?.isContentEditable;
 
 function onKey(e) {
@@ -78,20 +97,32 @@ function onKey(e) {
   const key = e.key.toLowerCase();
   if (mod && key === 'o') {
     e.preventDefault();
+    if (busy()) return;
+    ui.mode = 'files';
     e.shiftKey ? addFolder() : addFiles();
     return;
   }
   if (mod && key === 'enter') {
     e.preventDefault();
-    if (!queue.running && !modalOpen()) startConversion();
+    if (busy() || modalOpen()) return;
+    if (ui.mode === 'batch') runJob();
+    else startConversion();
+    return;
+  }
+  if (key === 'escape' && ui.settingsOpen) {
+    ui.settingsOpen = false;
     return;
   }
   if (modalOpen() || isTyping(e)) return;
+  if (key === 'escape' && busy()) {
+    if (batch.running) api.cancel();
+    else cancelConversion();
+    return;
+  }
+  if (ui.mode === 'batch') return;
   if (mod && key === 'v') {
     e.preventDefault();
     pasteFromClipboard();
-  } else if (key === 'escape' && queue.running) {
-    cancelConversion();
   } else if ((key === 'delete' || key === 'backspace') && selectedItem.value && !queue.running) {
     removeItem(selectedItem.value.id);
   } else if (key === 'arrowdown' || key === 'arrowup') {
@@ -101,7 +132,7 @@ function onKey(e) {
     const i = list.findIndex((it) => it.id === queue.selectedId);
     const next = key === 'arrowdown' ? Math.min(list.length - 1, i + 1) : Math.max(0, i - 1);
     queue.selectedId = list[next].id;
-    document.querySelector(`[data-row="${list[next].id}"]`)?.scrollIntoView({ block: 'nearest' });
+    window.dispatchEvent(new CustomEvent('queue:reveal', { detail: next }));
   } else if (key === ' ' && selectedItem.value?.type === 'image') {
     e.preventDefault();
     ui.previewId = selectedItem.value.id;
@@ -121,7 +152,12 @@ onMounted(() => {
   window.addEventListener('dragleave', onDragLeave);
   window.addEventListener('drop', onDrop);
   window.addEventListener('keydown', onKey);
-  offOpen = api.onOpenPaths((paths) => addPaths(paths, { recursive: true }));
+  api.onEngineCrash(() => toast('Процесс обработки перезапущен после сбоя. Подробности — в журнале ошибок', { kind: 'error', timeout: 8000 }));
+  offOpen = api.onOpenPaths((paths) => {
+    if (busy()) return;
+    ui.mode = 'files';
+    addPaths(paths, { recursive: true });
+  });
   api
     .info()
     .then((info) => {
@@ -155,14 +191,60 @@ onBeforeUnmount(() => {
   padding: 0 8px 8px;
 }
 
-.workspace__queue {
+.workspace__main {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workspace__panel {
+  flex: 1;
+  min-height: 0;
 }
 
 .workspace__inspector {
   width: var(--inspector-w);
   flex: none;
+}
+
+/* Компактное окно: настройки выезжают поверх, как панель */
+.workspace__inspector.is-drawer {
+  position: fixed;
+  z-index: 1500;
+  top: var(--titlebar-h);
+  right: 8px;
+  bottom: 8px;
+  width: min(var(--inspector-w), calc(100vw - 16px));
+  box-shadow: var(--shadow-pop);
+  transform: translateX(calc(100% + 16px));
+  visibility: hidden;
+  transition: transform 240ms var(--ease), visibility 0s linear 240ms;
+}
+
+.workspace__inspector.is-drawer.is-open {
+  transform: none;
+  visibility: visible;
+  transition: transform 240ms var(--ease);
+}
+
+/* В компактном окне уведомления — по центру, над нижней панелью */
+.is-compact .toasts {
+  left: 50%;
+  bottom: 84px;
+  width: calc(100vw - 32px);
+}
+
+.drawer-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  background: var(--scrim);
+}
+
+.is-narrow .workspace {
+  padding: 0 6px 6px;
 }
 
 .drop-overlay {

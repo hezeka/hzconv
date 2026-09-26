@@ -1,6 +1,11 @@
 <template>
   <aside class="insp">
     <div class="insp__top">
+      <div class="insp__ctx" :class="{ 'is-batch': ui.mode === 'batch' }">
+        <Icon :name="ui.mode === 'batch' ? 'layers' : 'files'" :size="14" />
+        <span class="ellipsis">{{ contextLabel }}</span>
+        <UiButton v-if="ui.compact" variant="ghost" size="s" icon="close" title="Закрыть настройки" class="insp__close" @click="ui.settingsOpen = false" />
+      </div>
       <UiSegmented v-model="ui.tab" :options="tabs" class="insp__tabs" />
       <div class="insp__presets">
         <UiSelect :model-value="null" :options="presetOptions" placeholder="Пресеты" :menu-width="300" class="insp__preset" @update:model-value="onPreset" />
@@ -22,17 +27,7 @@
         <Icon name="chevron-right" :size="13" class="dest__chevron" />
       </button>
 
-      <div v-if="queue.running" class="run">
-        <div class="run__bar"><div class="run__fill" :style="{ transform: `scaleX(${progress})` }" /></div>
-        <div class="run__row">
-          <span class="num">{{ Math.round(progress * 100) }}%</span>
-          <UiButton icon="stop" @click="cancelConversion">Остановить</UiButton>
-        </div>
-      </div>
-      <UiButton v-else variant="primary" size="l" block :disabled="!queue.items.length" @click="startConversion()">
-        {{ queue.items.length ? `Конвертировать ${files(queue.items.length)}` : 'Конвертировать' }}
-        <template #trail><kbd class="insp__kbd">{{ mod }} ↵</kbd></template>
-      </UiButton>
+      <ActionButton />
     </footer>
 
     <PresetDialog />
@@ -41,12 +36,12 @@
 
 <script setup>
 import { computed } from 'vue';
-import { platform } from '../api';
 import { ui } from '../store/ui';
 import { settings, builtinPresets, userPresets, applyPreset } from '../store/settings';
-import { queue, counts, progress, startConversion, cancelConversion } from '../store/queue';
+import { queue, counts } from '../store/queue';
+import { batch, activeJob } from '../store/batch';
 import { toast } from '../store/toast';
-import { files, shortPath } from '../utils/format';
+import { shortPath } from '../utils/format';
 import Icon from './ui/Icon.vue';
 import UiButton from './ui/UiButton.vue';
 import UiSegmented from './ui/UiSegmented.vue';
@@ -56,13 +51,17 @@ import VideoSettings from './settings/VideoSettings.vue';
 import AudioSettings from './settings/AudioSettings.vue';
 import OutputSettings from './settings/OutputSettings.vue';
 import PresetDialog from './PresetDialog.vue';
+import ActionButton from './ActionButton.vue';
 
-const mod = platform === 'darwin' ? '⌘' : 'Ctrl';
+
+const typeCounts = computed(() => (ui.mode === 'batch' ? batch.stats?.byType || {} : counts.value));
+const nf = new Intl.NumberFormat('ru-RU', { notation: 'compact' });
+const tabCount = (n) => (n ? nf.format(n) : undefined);
 
 const tabs = computed(() => [
-  { value: 'image', label: 'Фото', count: counts.value.image || undefined, hint: 'Изображения' },
-  { value: 'video', label: 'Видео', count: counts.value.video || undefined },
-  { value: 'audio', label: 'Аудио', count: counts.value.audio || undefined },
+  { value: 'image', label: 'Фото', count: tabCount(typeCounts.value.image), hint: 'Изображения' },
+  { value: 'video', label: 'Видео', count: tabCount(typeCounts.value.video) },
+  { value: 'audio', label: 'Аудио', count: tabCount(typeCounts.value.audio) },
   { value: 'output', label: 'Сохранение' }
 ]);
 
@@ -97,6 +96,11 @@ function onPreset(id) {
   toast(`Пресет «${preset.name}» применён`, { kind: 'ok' });
 }
 
+const contextLabel = computed(() => {
+  if (ui.mode === 'batch') return activeJob.value ? `Задание «${activeJob.value.name}»` : 'Пакетный режим';
+  return queue.items.length ? `Файлы в очереди · ${queue.items.length}` : 'Файлы в очереди';
+});
+
 const destination = computed(() => {
   const o = settings.output;
   if (o.location === 'source') return 'Рядом с исходными файлами';
@@ -121,6 +125,31 @@ const destination = computed(() => {
   gap: 8px;
   padding: 10px 12px 12px;
   border-bottom: 1px solid var(--line);
+}
+
+.insp__ctx {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  padding: 0 4px 0 8px;
+  border-radius: var(--r-s);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.insp__ctx.is-batch {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.insp__ctx span {
+  flex: 1;
+}
+
+.insp__close {
+  margin-left: auto;
 }
 
 .insp__tabs :deep(.seg__item) {
@@ -180,38 +209,4 @@ const destination = computed(() => {
   color: var(--text-3);
 }
 
-.insp__kbd {
-  background: rgba(255, 255, 255, 0.14);
-  border-color: rgba(255, 255, 255, 0.2);
-  color: rgba(255, 255, 255, 0.85);
-  font-size: 10px;
-}
-
-.run {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.run__bar {
-  height: 4px;
-  border-radius: 3px;
-  background: var(--panel-3);
-  overflow: hidden;
-}
-
-.run__fill {
-  height: 100%;
-  background: var(--accent);
-  transform-origin: left;
-  transition: transform 240ms linear;
-}
-
-.run__row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 12px;
-  color: var(--text-2);
-}
 </style>

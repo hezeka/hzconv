@@ -16,6 +16,10 @@ const saved = load();
 export const ui = reactive({
   theme: ['system', 'light', 'dark'].includes(saved.theme) ? saved.theme : 'system',
   tab: saved.tab || 'image',
+  mode: saved.mode === 'batch' ? 'batch' : 'files',
+  compact: false,
+  narrow: false,
+  settingsOpen: false,
   folderRecursive: saved.folderRecursive !== false,
   // Модальные окна
   cropId: null,
@@ -34,10 +38,10 @@ export function applyTheme() {
 }
 
 watch(
-  () => [ui.theme, ui.tab, ui.folderRecursive],
+  () => [ui.theme, ui.tab, ui.folderRecursive, ui.mode],
   () => {
     try {
-      localStorage.setItem(KEY, JSON.stringify({ theme: ui.theme, tab: ui.tab, folderRecursive: ui.folderRecursive }));
+      localStorage.setItem(KEY, JSON.stringify({ theme: ui.theme, tab: ui.tab, folderRecursive: ui.folderRecursive, mode: ui.mode }));
     } catch {
       /* не критично */
     }
@@ -45,3 +49,12 @@ watch(
 );
 
 watch(() => ui.theme, applyTheme);
+
+// Компактная раскладка: настройки уходят в выдвижную панель.
+function measure() {
+  ui.compact = window.innerWidth < 860;
+  ui.narrow = window.innerWidth < 560;
+  if (!ui.compact) ui.settingsOpen = false;
+}
+measure();
+window.addEventListener('resize', measure);

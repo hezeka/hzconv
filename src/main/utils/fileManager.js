@@ -6,6 +6,14 @@ const { getFileType, extOf } = require('../formats');
 
 const SKIP_DIRS = new Set(['node_modules', '$recycle.bin', 'system volume information', '__macosx']);
 
+// Относительный путь в едином виде для сравнения: прямые слэши, без ./ и хвостового слэша.
+function normalizeRel(rel) {
+  return String(rel || '')
+    .split(/[\\/]+/)
+    .filter((p) => p && p !== '.')
+    .join('/');
+}
+
 function shouldSkipDir(name, exclude) {
   if (name.startsWith('.')) return true;
   const lower = name.toLowerCase();
@@ -53,18 +61,18 @@ class FileManager {
 
   /**
    * Поддерживаемые файлы в папке.
-   * formats — фильтр расширений (пустой = все поддерживаемые),
-   * subfolders — выбранные подпапки (пустой = все; сам dirPath означает «файлы в корне»).
+   * formats — фильтр расширений (пустой = все поддерживаемые).
+   * excluded — относительные пути папок, чьи собственные файлы не берутся
+   * ('' — файлы в корне). Вложенные папки решаются независимо, поэтому новые
+   * папки, появившиеся на диске позже, по умолчанию включены.
+   * withStats — вернуть размер каждого файла (для пакетного режима).
    */
-  static async getFilesFromDirectory(dirPath, { formats = [], recursive = false, subfolders = [], exclude = [] } = {}) {
+  static async getFilesFromDirectory(dirPath, { formats = [], recursive = false, excluded = [], exclude = [], withStats = false } = {}) {
+    const root = path.resolve(dirPath);
     const skip = new Set(exclude.map((e) => String(e).toLowerCase()));
     const allow = new Set(formats.map((f) => String(f).toLowerCase().replace(/^\./, '')));
-    const selected = subfolders.map((p) => path.resolve(p));
-    const hasFilter = selected.length > 0;
+    const off = new Set(excluded.map((r) => normalizeRel(r)));
     const result = [];
-
-    const dirSelected = (dir) => selected.some((s) => (s === path.resolve(dirPath) ? dir === s : dir === s || dir.startsWith(s + path.sep)));
-    const dirOnTheWay = (dir) => selected.some((s) => s.startsWith(dir + path.sep));
 
     const walk = async (dir) => {
       let entries;
@@ -73,7 +81,7 @@ class FileManager {
       } catch {
         return; // нет доступа — пропускаем
       }
-      const takeFiles = !hasFilter || dirSelected(dir);
+      const takeFiles = !off.has(normalizeRel(path.relative(root, dir)));
       const subdirs = [];
       for (const e of entries) {
         if (e.isFile()) {
@@ -82,15 +90,24 @@ class FileManager {
           if (allow.size && !allow.has(extOf(e.name))) continue;
           result.push(path.join(dir, e.name));
         } else if (e.isDirectory() && recursive && !shouldSkipDir(e.name, skip)) {
-          const full = path.join(dir, e.name);
-          if (!hasFilter || dirSelected(full) || dirOnTheWay(full)) subdirs.push(full);
+          subdirs.push(path.join(dir, e.name));
         }
       }
       for (const d of subdirs) await walk(d);
     };
 
-    await walk(path.resolve(dirPath));
-    return result.sort((a, b) => a.localeCompare(b, 'ru', { numeric: true }));
+    await walk(root);
+    result.sort((a, b) => a.localeCompare(b, 'ru', { numeric: true }));
+    if (!withStats) return result;
+
+    // Размеры — пачками, чтобы не открывать десятки тысяч операций разом.
+    const out = [];
+    for (let i = 0; i < result.length; i += 256) {
+      const chunk = result.slice(i, i + 256);
+      const sizes = await Promise.all(chunk.map((p) => fs.stat(p).then((st) => st.size, () => 0)));
+      chunk.forEach((p, j) => out.push({ path: p, size: sizes[j] }));
+    }
+    return out;
   }
 
   /**
@@ -116,5 +133,7 @@ class FileManager {
     return out;
   }
 }
+
+FileManager.normalizeRel = normalizeRel;
 
 module.exports = FileManager;

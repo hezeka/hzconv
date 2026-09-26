@@ -35,6 +35,7 @@ export const api = {
   expandPaths: (params) => bridge.expandPaths(plain(params)),
   scanFolder: (params) => bridge.scanFolder(plain(params)),
   getSubfolders: (params) => bridge.getSubfolders(plain(params)),
+  pathKind: (path) => bridge.pathKind(path),
 
   inspect: (paths) => bridge.inspect(plain(paths)),
   details: (path) => bridge.details(path),
@@ -45,6 +46,13 @@ export const api = {
   cancel: () => bridge.cancel(),
   onProgress: (cb) => bridge.onProgress(cb),
   onItem: (cb) => bridge.onItem(cb),
+
+  batchScan: (params) => bridge.batchScan(plain(params)),
+  batchStart: (params) => bridge.batchStart(plain(params)),
+  onBatchProgress: (cb) => bridge.onBatchProgress(cb),
+  previewOutput: (params) => bridge.previewOutput(plain(params)),
+  openLogs: () => bridge.openLogs(),
+  onEngineCrash: (cb) => bridge.onEngineCrash(cb),
 
   reveal: (path) => bridge.reveal(path),
   openPath: (path) => bridge.openPath(path),

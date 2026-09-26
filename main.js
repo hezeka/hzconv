@@ -4,9 +4,9 @@ const fs = require('fs-extra');
 const os = require('os');
 const { formats, defaults } = require('./src/main/formats');
 const FileManager = require('./src/main/utils/fileManager');
-const inspect = require('./src/main/inspect');
-const { Runner, estimate } = require('./src/main/runner');
+const logger = require('./src/main/utils/logger');
 const { ffmpegPath } = require('./src/main/ffmpeg');
+const { EngineHost } = require('./src/main/engine/host');
 
 const isDev = process.env.NODE_ENV === 'development';
 const isMac = process.platform === 'darwin';
@@ -19,7 +19,8 @@ const THEME = {
 
 let mainWindow = null;
 let pendingPaths = [];
-const runner = new Runner();
+// sharp и ffmpeg работают в отдельном процессе: падение кодека не закрывает окно.
+let engine = null;
 
 // ——— Один экземпляр: повторный запуск передаёт файлы в уже открытое окно ———
 
@@ -98,8 +99,8 @@ function createWindow() {
     y: state.y,
     width: state.width,
     height: state.height,
-    minWidth: 920,
-    minHeight: 600,
+    minWidth: 420,
+    minHeight: 480,
     show: false,
     backgroundColor: t.bg,
     // Windows: нативные кнопки поверх нашей шапки (со Snap Layouts), macOS: «светофор».
@@ -144,7 +145,7 @@ function createWindow() {
   mainWindow.on('leave-full-screen', sendState);
 
   mainWindow.on('close', (e) => {
-    if (runner.busy) {
+    if (engine?.busy) {
       const choice = dialog.showMessageBoxSync(mainWindow, {
         type: 'question',
         buttons: ['Продолжить конвертацию', 'Прервать и закрыть'],
@@ -157,7 +158,7 @@ function createWindow() {
         e.preventDefault();
         return;
       }
-      runner.cancel();
+      engine.cancel();
     }
     saveWindowState();
   });
@@ -177,13 +178,21 @@ nativeTheme.on('updated', () => {
 });
 
 app.whenReady().then(() => {
+  const logFile = path.join(app.getPath('logs'), 'hzconv.log');
+  logger.setFile(logFile);
+  engine = new EngineHost({ logFile });
+  engine.on('event', (channel, payload) => send(channel, payload));
+  engine.on('crash', () => send('engine:crash', null));
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
-app.on('before-quit', () => runner.cancel());
+app.on('before-quit', () => {
+  engine?.cancel();
+  engine?.kill();
+});
 
 app.on('window-all-closed', () => {
   if (!isMac) app.quit();
@@ -223,6 +232,7 @@ ipcMain.handle('app:info', () => ({
   platform: process.platform,
   version: app.getVersion(),
   cpus: os.cpus().length,
+  logs: app.getPath('logs'),
   ffmpeg: Boolean(ffmpegPath),
   theme: nativeTheme.themeSource
 }));
@@ -268,43 +278,65 @@ ipcMain.handle('fs:expand', (_e, { paths, recursive = true, exclude = [] } = {})
   FileManager.expandPaths(strList(paths), { recursive: recursive !== false, exclude: strList(exclude) })
 );
 
-ipcMain.handle('fs:scan-folder', async (_e, { dir, recursive = true, formats: fmts = [], subfolders = [], exclude = [] } = {}) => {
+ipcMain.handle('fs:scan-folder', async (_e, { dir, recursive = true, formats: fmts = [], excluded = [], exclude = [] } = {}) => {
   if (!isStr(dir)) return [];
-  const files = await FileManager.getFilesFromDirectory(dir, { recursive: recursive !== false, formats: strList(fmts), subfolders: strList(subfolders), exclude: strList(exclude) });
+  const files = await FileManager.getFilesFromDirectory(dir, { recursive: recursive !== false, formats: strList(fmts), excluded: (Array.isArray(excluded) ? excluded : []).filter((r) => typeof r === 'string'), exclude: strList(exclude) });
   return files.map((p) => ({ path: p, baseDir: dir }));
+});
+
+ipcMain.handle('fs:kind', async (_e, p) => {
+  if (!isStr(p)) return null;
+  try {
+    return (await fs.stat(p)).isDirectory() ? 'dir' : 'file';
+  } catch {
+    return null;
+  }
 });
 
 ipcMain.handle('fs:subfolders', (_e, { dir, exclude = [] } = {}) => (isStr(dir) ? FileManager.getSubfolders(dir, { recursive: true, exclude: strList(exclude) }) : []));
 
-ipcMain.handle('media:inspect', (_e, paths) => inspect.inspect(strList(paths)));
-ipcMain.handle('media:details', (_e, filePath) => (isStr(filePath) ? inspect.details(filePath) : null));
+ipcMain.handle('media:inspect', (_e, paths) => engine.call('inspect', strList(paths)));
+ipcMain.handle('media:details', (_e, filePath) => (isStr(filePath) ? engine.call('details', filePath) : null));
 
 ipcMain.handle('media:preview', (_e, { path: filePath, edit, maxSize = 1600, time = null, autoOrient = true } = {}) => {
   if (!isStr(filePath)) throw new Error('Не указан файл');
   const e = sanitizeEdit(edit) || {};
-  return inspect.preview(filePath, { edit: { ...e, crop: null }, maxSize: Math.min(4096, Math.max(256, Number(maxSize) || 1600)), time: Number.isFinite(time) ? time : null, autoOrient: autoOrient !== false });
+  return engine.call('preview', filePath, { edit: { ...e, crop: null }, maxSize: Math.min(4096, Math.max(256, Number(maxSize) || 1600)), time: Number.isFinite(time) ? time : null, autoOrient: autoOrient !== false });
 });
 
 ipcMain.handle('media:estimate', (_e, { item, settings } = {}) => {
   const it = sanitizeItem(item);
   if (!it) throw new Error('Не указан файл');
-  return estimate(it, settings);
+  return engine.call('estimate', it, settings);
 });
 
-runner.on('progress', (batch) => send('convert:progress', batch));
-runner.on('item', (event) => send('convert:item', event));
+ipcMain.handle('batch:scan', (_e, { source, settings } = {}) => engine.call('batchScan', source, settings));
+
+ipcMain.handle('batch:start', async (_e, { source, settings, onlyPaths } = {}) => {
+  if (engine.busy) throw new Error('Конвертация уже идёт');
+  const summary = await engine.call('batchStart', { source, settings, onlyPaths: strList(onlyPaths) });
+  if (settings?.output?.openWhenDone && summary.done > 0 && summary.outputDirs.length) shell.openPath(summary.outputDirs[0]);
+  return summary;
+});
+
+ipcMain.handle('output:preview', (_e, { path: filePath, baseDir, settings } = {}) =>
+  isStr(filePath) ? engine.call('previewOutput', { path: filePath, baseDir: isStr(baseDir) ? baseDir : null }, settings) : null
+);
+
+ipcMain.handle('app:open-logs', () => shell.openPath(app.getPath('logs')));
 
 ipcMain.handle('convert:start', async (_e, { items, settings } = {}) => {
   const list = (Array.isArray(items) ? items : []).map(sanitizeItem).filter(Boolean);
   if (!list.length) throw new Error('Очередь пуста');
-  const summary = await runner.start(list, settings);
+  if (engine.busy) throw new Error('Конвертация уже идёт');
+  const summary = await engine.call('convert', list, settings);
   if (settings?.output?.openWhenDone && summary.done > 0 && summary.outputDirs.length) {
     shell.openPath(summary.outputDirs[0]);
   }
   return summary;
 });
 
-ipcMain.handle('convert:cancel', () => runner.cancel());
+ipcMain.handle('convert:cancel', () => engine.cancel());
 
 ipcMain.handle('shell:reveal', (_e, p) => {
   if (isStr(p) && fs.existsSync(p)) shell.showItemInFolder(p);

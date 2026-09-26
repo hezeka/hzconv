@@ -15,13 +15,13 @@
         <UiButton icon="folder" @click="addFolder">Добавить папку</UiButton>
       </div>
 
-      <div class="empty__keys">
+      <div v-if="!ui.narrow" class="empty__keys">
         <span><kbd>{{ mod }}</kbd> <kbd>O</kbd> файлы</span>
         <span><kbd>{{ mod }}</kbd> <kbd>V</kbd> из буфера</span>
       </div>
     </div>
 
-    <dl class="empty__formats">
+    <dl v-if="!ui.compact" class="empty__formats">
       <div v-for="g in groups" :key="g.label">
         <dt>{{ g.label }}</dt>
         <dd class="mono">{{ g.list }}</dd>
@@ -32,6 +32,7 @@
 
 <script setup>
 import { platform } from '../api';
+import { ui } from '../store/ui';
 import { useAddActions } from '../composables/useAddActions';
 import { inputFormats } from '../utils/targets';
 import Icon from './ui/Icon.vue';
@@ -147,6 +148,22 @@ const groups = [
 
 .empty__keys kbd {
   margin-right: 1px;
+}
+
+@media (max-height: 560px) {
+  .empty__art {
+    display: none;
+  }
+}
+
+.is-narrow .empty__stage {
+  padding: 20px 12px;
+}
+
+.is-narrow .empty__actions {
+  flex-direction: column;
+  width: 100%;
+  max-width: 260px;
 }
 
 .empty__formats {

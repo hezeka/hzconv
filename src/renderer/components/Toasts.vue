@@ -34,7 +34,7 @@ const icons = { info: 'info', ok: 'check', warn: 'alert', error: 'alert' };
   display: flex;
   align-items: center;
   gap: 10px;
-  max-width: 520px;
+  max-width: min(520px, 100%);
   padding: 9px 14px 9px 12px;
   border-radius: 10px;
   background: var(--panel-raised);

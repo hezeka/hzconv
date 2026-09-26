@@ -24,9 +24,9 @@
         <Icon name="arrow" :size="12" class="row__arrow" />
         <span class="num row__strong">{{ formatBytes(item.outputSize) }}</span>
         <span class="row__delta num" :class="item.outputSize <= item.size ? 'is-good' : 'is-bad'">{{ formatDelta(item.size, item.outputSize) }}</span>
-        <span v-if="item.outputs?.length > 1" class="faint">{{ files(item.outputs.length) }}</span>
-        <span v-else-if="outDims" class="faint num">{{ outDims }}</span>
-        <span class="faint num">{{ formatElapsed(item.elapsed) }}</span>
+        <span v-if="item.outputs?.length > 1" class="faint row__extra">{{ files(item.outputs.length) }}</span>
+        <span v-else-if="outDims" class="faint num row__extra">{{ outDims }}</span>
+        <span class="faint num row__extra">{{ formatElapsed(item.elapsed) }}</span>
       </div>
       <div v-else-if="item.status === 'error'" class="row__meta row__meta--error ellipsis" :title="item.error">{{ item.error }}</div>
       <div v-else-if="item.status === 'skipped'" class="row__meta faint">Пропущен — {{ (item.error || 'файл уже существует').toLowerCase() }}</div>
@@ -39,7 +39,7 @@
         <span>{{ item.ext.toUpperCase() }}</span>
         <span v-if="dims" class="num">{{ dims }}</span>
         <span v-if="item.details?.duration" class="num">{{ formatDuration(item.details.duration) }}</span>
-        <span v-if="item.details?.animated" class="faint">анимация · {{ item.details.frames }} кадр.</span>
+        <span v-if="item.details?.animated" class="faint row__extra">анимация · {{ item.details.frames }} кадр.</span>
         <span class="num">{{ formatBytes(item.size) }}</span>
         <span v-if="item.status === 'queued'" class="faint">в очереди</span>
       </div>
@@ -117,8 +117,6 @@ function reveal() {
   margin: 0 6px;
   padding: 0 8px;
   border-radius: var(--r);
-  content-visibility: auto;
-  contain-intrinsic-size: auto 58px;
   transition: background var(--t-fast) var(--ease);
 }
 
@@ -311,6 +309,23 @@ function reveal() {
   transform-origin: left;
   transition: transform 200ms linear;
   opacity: 0.7;
+}
+
+/* Узкое окно: действия только у выбранной строки, второстепенные данные скрыты */
+.is-narrow .row__extra {
+  display: none;
+}
+
+.is-narrow .row__actions {
+  display: none;
+}
+
+.is-narrow .row.is-selected .row__actions {
+  display: flex;
+}
+
+.is-narrow .row.is-selected .row__state {
+  display: none;
 }
 
 .row--queued .row__main {

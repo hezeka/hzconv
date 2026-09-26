@@ -394,4 +394,32 @@ function close() {
 .pv-bar__settings {
   margin-left: auto;
 }
+
+@media (max-width: 900px) {
+  .pv-head {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .pv-stats > .faint {
+    display: none;
+  }
+  .pv-stats {
+    margin-left: 0;
+    width: 100%;
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  .pv-bar {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .pv-bar__slider {
+    width: auto;
+    flex: 1;
+    min-width: 160px;
+  }
+  .pv-bar__note {
+    display: none;
+  }
+}
 </style>

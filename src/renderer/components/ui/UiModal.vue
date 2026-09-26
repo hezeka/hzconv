@@ -67,6 +67,12 @@ watch(
   backdrop-filter: blur(2px);
 }
 
+@media (max-width: 700px), (max-height: 560px) {
+  .modal {
+    padding: 8px;
+  }
+}
+
 .modal__dialog:focus,
 .modal__dialog:focus-visible {
   outline: none;

@@ -12,10 +12,10 @@
           <UiInput v-model="o.customDir" mono placeholder="Путь или относительный путь, например ../export" />
           <UiButton icon="folder-open" title="Выбрать папку" @click="pickDir" />
         </div>
-        <p class="note">Относительный путь отсчитывается от папки исходного файла.</p>
+        <p class="note">{{ ui.mode === 'batch' ? 'Относительный путь отсчитывается от папки задания: ../cards — соседняя папка cards.' : 'Относительный путь отсчитывается от папки исходного файла или добавленной папки.' }}</p>
       </template>
 
-      <UiSwitch v-if="o.location !== 'source'" v-model="o.preserveStructure" hint="Для файлов, добавленных папкой: вложенные папки повторятся в результате">
+      <UiSwitch v-if="o.location !== 'source'" v-model="o.preserveStructure" :hint="ui.mode === 'batch' ? 'Подпапки задания повторятся в папке результата' : 'Для файлов, добавленных папкой: вложенные папки повторятся в результате'">
         Сохранять структуру папок
       </UiSwitch>
     </UiSection>
@@ -31,7 +31,7 @@
     </UiSection>
 
     <UiSection title="Если файл уже есть">
-      <UiSegmented v-model="o.conflict" :options="conflicts" />
+      <UiSelect v-model="o.conflict" :options="conflicts" />
       <p v-if="o.conflict === 'overwrite' && o.location === 'source'" class="note note--warn">
         Если формат не меняется, исходники будут заменены результатом. Удобно для пакетного сжатия, но отменить нельзя.
       </p>
@@ -63,6 +63,7 @@
 import { computed } from 'vue';
 import { api } from '../../api';
 import { settings, resetSection } from '../../store/settings';
+import { ui } from '../../store/ui';
 import UiSection from '../ui/UiSection.vue';
 import UiField from '../ui/UiField.vue';
 import UiSwitch from '../ui/UiSwitch.vue';
@@ -81,17 +82,19 @@ const locations = [
 ];
 
 const conflicts = [
-  { value: 'rename', label: 'Добавить номер' },
-  { value: 'overwrite', label: 'Заменить' },
-  { value: 'skip', label: 'Пропустить' }
+  { value: 'newer', label: 'Обновить, если исходник изменился', hint: 'Для регулярных заданий: актуальные файлы пропускаются' },
+  { value: 'rename', label: 'Сохранить рядом с номером', hint: 'photo_1.webp' },
+  { value: 'overwrite', label: 'Всегда заменять' },
+  { value: 'skip', label: 'Пропускать' }
 ];
 
 const conflictNote = computed(
   () =>
     ({
+      newer: 'Повторный запуск обработает только новые и изменённые файлы — остальные пропускаются за секунды.',
       rename: 'Новый файл получит суффикс: photo_1.webp',
       overwrite: 'Существующий файл будет заменён',
-      skip: 'Файл не конвертируется, если результат уже есть — удобно дозаливать новые'
+      skip: 'Файл не конвертируется, если результат уже есть'
     })[o.conflict]
 );
 

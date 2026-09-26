@@ -1,9 +1,9 @@
-import { reactive, watch, ref } from 'vue';
+import { nextTick, reactive, watch, ref } from 'vue';
 import defaults from '../../shared/defaults.json';
 
 const KEY = 'hzconv.settings.v2';
 const PRESETS_KEY = 'hzconv.presets.v1';
-const LEGACY_KEYS = ['conversionForm_settings', 'directoryConversion_settings'];
+const LEGACY_KEY = 'conversionForm_settings';
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -30,10 +30,11 @@ function read(key) {
   }
 }
 
-// Перенос настроек из прошлой версии (одна форма «формат/качество/папка»).
-function migrateLegacy() {
-  const legacy = LEGACY_KEYS.map(read).find(Boolean);
-  if (!legacy) return null;
+/**
+ * Настройки прошлой версии (одна форма «формат/качество/папка») → профиль v2.
+ * Используется и для штучного режима, и для переноса пакетной формы в задание.
+ */
+export function legacyToSettings(legacy) {
   const s = clone(defaults);
   const q = legacy.quality;
   s.image.quality = q === 'low' ? 65 : q === 'high' ? 90 : 80;
@@ -51,27 +52,68 @@ function migrateLegacy() {
   if (map[f]) s.image.format = map[f];
   if (['mp4', 'webm', 'mov', 'mkv', 'avi'].includes(f)) s.video.format = f;
   if (['mp3', 'wav', 'ogg', 'flac', 'm4a'].includes(f)) s.audio.format = f;
-  LEGACY_KEYS.forEach((k) => localStorage.removeItem(k));
   return s;
 }
 
+function migrateLegacy() {
+  const legacy = read(LEGACY_KEY);
+  if (!legacy) return null;
+  localStorage.removeItem(LEGACY_KEY);
+  return legacyToSettings(legacy);
+}
+
+// Активный профиль: штучный режим или выбранное пакетное задание.
+// Компоненты работают с одним объектом settings, а профили подменяют его содержимое.
 export const settings = reactive(mergeDefaults(defaults, read(KEY) || migrateLegacy()));
 
+const saveSingle = (data) => localStorage.setItem(KEY, JSON.stringify(data));
+let persist = saveSingle;
 let saveTimer = null;
+let suspended = false;
+
+function flush() {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  try {
+    persist(clone(settings));
+  } catch {
+    /* переполненное хранилище — не критично */
+  }
+}
+
 watch(
   settings,
   () => {
+    if (suspended) return;
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      try {
-        localStorage.setItem(KEY, JSON.stringify(settings));
-      } catch {
-        /* переполненное хранилище — не критично */
-      }
-    }, 250);
+    saveTimer = setTimeout(flush, 250);
   },
   { deep: true }
 );
+
+function replaceInPlace(target, source) {
+  for (const [k, v] of Object.entries(source)) {
+    if (isObj(v) && isObj(target[k])) replaceInPlace(target[k], v);
+    else target[k] = v;
+  }
+}
+
+/** Подменяет активный профиль. save вызывается при каждом изменении настроек. */
+export function bindProfile(data, save) {
+  if (saveTimer) flush();
+  suspended = true;
+  // Обновляем на месте: компоненты держат ссылки вида settings.image.
+  replaceInPlace(settings, mergeDefaults(defaults, data));
+  persist = save;
+  nextTick(() => {
+    suspended = false;
+  });
+}
+
+export function bindSingle() {
+  if (persist === saveSingle) return;
+  bindProfile(read(KEY) || {}, saveSingle);
+}
 
 export function resetSection(section) {
   Object.assign(settings[section], clone(defaults[section]));

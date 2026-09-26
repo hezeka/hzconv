@@ -13,34 +13,7 @@
         <UiInput v-model="extFilter" mono clearable placeholder="все поддерживаемые, например: jpg, png" />
       </UiField>
 
-      <div v-if="ui.folderRecursive" class="fi__folders">
-        <div class="fi__folders-head">
-          <label class="check">
-            <input type="checkbox" :checked="allSelected" :indeterminate.prop="someSelected" @change="toggleAll($event.target.checked)" />
-            <span>Все папки</span>
-          </label>
-          <span class="faint">{{ selected.length ? `выбрано ${selected.length}` : 'выбор не задан — берутся все' }}</span>
-        </div>
-
-        <UiInput v-model="search" icon="search" clearable placeholder="Поиск по названию, * — любые символы" class="fi__search" />
-
-        <div class="fi__list">
-          <div v-if="loadingFolders" class="fi__empty">Читаю структуру папок…</div>
-          <div v-else-if="!filteredFolders.length" class="fi__empty">{{ folders.length ? 'Ничего не найдено' : 'Вложенных папок нет' }}</div>
-          <label
-            v-for="f in filteredFolders"
-            v-else
-            :key="f.path"
-            class="check fi__item"
-            :style="{ paddingLeft: `${10 + (search ? 0 : f.depth * 16)}px` }"
-          >
-            <input type="checkbox" :checked="selected.includes(f.path)" @change="toggle(f.path)" />
-            <Icon :name="f.isRoot ? 'layers' : 'folder'" :size="14" class="fi__icon" />
-            <span class="ellipsis">{{ search && !f.isRoot ? f.relativePath : f.name }}</span>
-            <span class="fi__count num">{{ f.fileCount || '' }}</span>
-          </label>
-        </div>
-      </div>
+      <FolderTree v-if="ui.folderRecursive" v-model="excluded" :folders="folders" :loading="loadingFolders" max-height="240px" class="fi__folders" />
     </div>
 
     <template #footer>
@@ -65,7 +38,7 @@ import { addEntries } from '../store/queue';
 import { toast } from '../store/toast';
 import { plural } from '../utils/format';
 import { inputFormats } from '../utils/targets';
-import Icon from './ui/Icon.vue';
+import FolderTree from './FolderTree.vue';
 import UiModal from './ui/UiModal.vue';
 import UiField from './ui/UiField.vue';
 import UiSwitch from './ui/UiSwitch.vue';
@@ -75,9 +48,8 @@ import UiButton from './ui/UiButton.vue';
 
 const typeFilter = ref('all');
 const extFilter = ref('');
-const search = ref('');
 const folders = ref([]);
-const selected = ref([]);
+const excluded = ref([]);
 const loadingFolders = ref(false);
 const found = ref(null);
 const scanning = ref(false);
@@ -101,41 +73,16 @@ const formatsFilter = computed(() => {
   return typeFilter.value === 'all' ? [] : inputFormats(typeFilter.value);
 });
 
-// Поиск: подстрока без учёта регистра, * — любые символы.
-function matches(text, pattern) {
-  if (!pattern.includes('*')) return text.toLowerCase().includes(pattern.toLowerCase());
-  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
-  return new RegExp(escaped, 'i').test(text);
-}
-
-const filteredFolders = computed(() => {
-  const q = search.value.trim();
-  if (!q) return folders.value;
-  return folders.value.filter((f) => f.isRoot || matches(f.name, q) || matches(f.relativePath, q));
-});
-
-const allSelected = computed(() => folders.value.length > 0 && selected.value.length === folders.value.length);
-const someSelected = computed(() => selected.value.length > 0 && !allSelected.value);
-
-function toggle(p) {
-  selected.value = selected.value.includes(p) ? selected.value.filter((x) => x !== p) : [...selected.value, p];
-}
-
-function toggleAll(on) {
-  const visible = filteredFolders.value.map((f) => f.path);
-  selected.value = on ? [...new Set([...selected.value, ...visible])] : selected.value.filter((p) => !visible.includes(p));
-}
-
 async function loadFolders() {
   const dir = ui.folderImport;
   folders.value = [];
-  selected.value = [];
+  excluded.value = [];
   if (!dir || !ui.folderRecursive) return;
   loadingFolders.value = true;
   try {
     const list = await api.getSubfolders({ dir, exclude: excludes() });
     if (ui.folderImport !== dir) return;
-    folders.value = [{ path: dir, name: 'Файлы в корне папки', relativePath: '', depth: 0, fileCount: 0, isRoot: true }, ...list];
+    folders.value = list;
   } catch (e) {
     toast(`Не удалось прочитать папку: ${errorText(e)}`, { kind: 'error' });
   } finally {
@@ -160,7 +107,7 @@ async function scan() {
       dir,
       recursive: ui.folderRecursive,
       formats: formatsFilter.value,
-      subfolders: ui.folderRecursive ? selected.value : [],
+      excluded: ui.folderRecursive ? excluded.value : [],
       exclude: excludes()
     });
     if (my === scanSeq) found.value = list;
@@ -176,7 +123,6 @@ watch(
   () => ui.folderImport,
   async (dir) => {
     if (!dir) return;
-    search.value = '';
     found.value = null;
     await loadFolders();
     scan();
@@ -192,7 +138,7 @@ watch(
   }
 );
 
-watch([formatsFilter, selected], scheduleScan, { deep: true });
+watch([formatsFilter, excluded], scheduleScan, { deep: true });
 
 async function changeDir() {
   const dir = await api.openFolder({ title: 'Добавить папку', defaultPath: ui.folderImport || undefined });
@@ -234,59 +180,9 @@ function close() {
 }
 
 .fi__folders {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
   margin-top: 6px;
   padding-top: 12px;
   border-top: 1px solid var(--line);
-}
-
-.fi__folders-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 12.5px;
-}
-
-.faint {
-  color: var(--text-3);
-  font-size: 11.5px;
-}
-
-.fi__list {
-  height: 240px;
-  overflow-y: auto;
-  border-radius: var(--r);
-  background: var(--panel-2);
-  box-shadow: inset 0 0 0 1px var(--line);
-  padding: 4px 0;
-}
-
-.fi__empty {
-  padding: 30px;
-  text-align: center;
-  color: var(--text-3);
-  font-size: 12.5px;
-}
-
-.fi__item {
-  height: 30px;
-  padding-right: 12px;
-}
-
-.fi__item:hover {
-  background: var(--panel-3);
-}
-
-.fi__icon {
-  color: var(--text-3);
-}
-
-.fi__count {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--text-3);
 }
 
 .fi__found {
@@ -300,49 +196,4 @@ function close() {
   font-weight: 600;
 }
 
-.check {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  font-size: 12.5px;
-  color: var(--text);
-}
-
-.check input {
-  appearance: none;
-  -webkit-appearance: none;
-  flex: none;
-  width: 15px;
-  height: 15px;
-  margin: 0;
-  border-radius: 4px;
-  background: var(--panel);
-  box-shadow: inset 0 0 0 1px var(--line-3);
-  display: grid;
-  place-items: center;
-  transition: background var(--t-fast) var(--ease);
-}
-
-.check input:checked,
-.check input:indeterminate {
-  background: var(--accent);
-  box-shadow: none;
-}
-
-.check input:checked::after {
-  content: '';
-  width: 8px;
-  height: 4px;
-  border-left: 1.75px solid #fff;
-  border-bottom: 1.75px solid #fff;
-  transform: translateY(-1px) rotate(-45deg);
-}
-
-.check input:indeterminate::after {
-  content: '';
-  width: 7px;
-  height: 1.75px;
-  background: #fff;
-  border-radius: 1px;
-}
 </style>

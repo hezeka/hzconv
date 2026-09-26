@@ -107,7 +107,7 @@
         <UiSelect v-model="s.crop.position" :options="POSITIONS" />
       </UiField>
       <UiSwitch v-model="s.trim" hint="Срезает однотонные или прозрачные поля по краям">Обрезать поля</UiSwitch>
-      <p class="note">Точный кадр для отдельного файла — в редакторе: двойной щелчок по файлу или клавиша C.</p>
+      <p v-if="ui.mode === 'files'" class="note">Точный кадр для отдельного файла — в редакторе: двойной щелчок по файлу или клавиша C.</p>
     </UiSection>
 
     <UiSection title="Несколько размеров" collapsible store-key="img-variants" :open="false" :summary="variantsSummary">
@@ -150,6 +150,7 @@
 <script setup>
 import { computed } from 'vue';
 import { settings, resetSection } from '../../store/settings';
+import { ui } from '../../store/ui';
 import { outputFormats, ASPECTS, POSITIONS } from '../../utils/targets';
 import Icon from '../ui/Icon.vue';
 import UiSection from '../ui/UiSection.vue';

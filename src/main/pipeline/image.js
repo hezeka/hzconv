@@ -26,7 +26,6 @@ const POSITIONS = {
 };
 
 const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
-const hasUserTransform = (edit) => Boolean(edit && (edit.rotate || edit.flipH || edit.flipV));
 
 async function readMeta(input) {
   const m = await sharp(input, { ...INPUT_OPTIONS, animated: true }).metadata();
@@ -46,12 +45,36 @@ async function readMeta(input) {
   };
 }
 
+// EXIF-ориентация 1–8 → [поворот, отражение] в семантике sharp: сначала flop, затем rotate.
+// Таблица проверена эмпирически на sharp 0.32.
+const ORIENTATION = { 1: [0, 0], 2: [0, 1], 3: [180, 0], 4: [180, 1], 5: [270, 1], 6: [90, 0], 7: [90, 1], 8: [270, 0] };
+
+// (R₁·F^m₁)∘(R₂·F^m₂) = R₁₊₍±₂₎·F^(m₁⊕m₂): отражение меняет знак последующего поворота.
+function compose([r1, m1], [r2, m2]) {
+  return [(((r1 + (m1 ? -r2 : r2)) % 360) + 360) % 360, m1 ^ m2];
+}
+
+/**
+ * Итоговая геометрия файла. Если метаданные удаляются, EXIF-ориентацию применяем всегда —
+ * иначе фото с телефона останется на боку, а подсказки для просмотрщика уже не будет.
+ */
+function geometryFor(meta, settings, edit) {
+  const autoOrient = settings.autoOrient || settings.metadata !== 'keep';
+  const exif = autoOrient && meta.orientation > 1 ? ORIENTATION[meta.orientation] || [0, 0] : [0, 0];
+  const fh = edit && edit.flipH ? 1 : 0;
+  const fv = edit && edit.flipV ? 1 : 0;
+  // flip (вертикаль) = поворот на 180° + flop
+  const flips = fh && fv ? [180, 0] : fv ? [180, 1] : fh ? [0, 1] : [0, 0];
+  const user = compose([(edit && edit.rotate) || 0, 0], flips);
+  const [rotate, flop] = compose(user, exif);
+  return { rotate, flop: Boolean(flop), exifApplied: exif[0] !== 0 || exif[1] !== 0 };
+}
+
 // Размер после EXIF-ориентации и ручного поворота.
 function orientedSize(meta, settings, edit) {
-  let { width: w, height: h } = meta;
-  if (settings.autoOrient && meta.orientation >= 5) [w, h] = [h, w];
-  if (edit && (edit.rotate === 90 || edit.rotate === 270)) [w, h] = [h, w];
-  return { width: w, height: h };
+  const { rotate } = geometryFor(meta, settings, edit);
+  const quarter = rotate === 90 || rotate === 270;
+  return quarter ? { width: meta.height, height: meta.width } : { width: meta.width, height: meta.height };
 }
 
 function parseAspect(crop) {
@@ -159,10 +182,14 @@ function hexToRgb(hex) {
 /**
  * Собирает pipeline без кодировщика.
  * target — { id, alpha, animated } итогового формата.
+ *
+ * Вся геометрия (EXIF-ориентация, ручной поворот и отражения) сводится к одной паре
+ * «отражение + поворот» и выполняется в одном проходе — так не теряются метаданные.
  */
 async function buildPipeline(input, meta, settings, edit, target, variant = {}) {
   const wantAnimated = meta.animated && settings.keepAnimation && Boolean(target.animated);
-  if (wantAnimated && edit && (edit.rotate === 90 || edit.rotate === 270)) {
+  const geo = geometryFor(meta, settings, edit);
+  if (wantAnimated && (geo.rotate === 90 || geo.rotate === 270)) {
     throw new Error('Поворот на 90° не поддерживается для анимации — отключите «Сохранять анимацию»');
   }
 
@@ -171,7 +198,7 @@ async function buildPipeline(input, meta, settings, edit, target, variant = {}) 
   const logicalCrop = computeCrop(logical.width, logical.height, edit, settings.crop);
   const cropSize = (c, fw, fh) => (c ? (c.rect ? { width: c.rect.width, height: c.rect.height } : { width: c.width, height: c.height }) : { width: fw, height: fh });
   const lBase = cropSize(logicalCrop, logical.width, logical.height);
-  const resize = computeResize(lBase.width, lBase.height, settings.resize, variant);
+  let resize = computeResize(lBase.width, lBase.height, settings.resize, variant);
 
   const inputOpts = { ...INPUT_OPTIONS, animated: wantAnimated };
   let k = 1;
@@ -185,57 +212,65 @@ async function buildPipeline(input, meta, settings, edit, target, variant = {}) 
     }
   }
 
-  let img = sharp(input, inputOpts);
-  let dims = { width: Math.round(logical.width * k), height: Math.round(logical.height * k) };
-  const exif = settings.autoOrient && meta.orientation > 1;
-  const userTransform = hasUserTransform(edit);
-  const useTrim = settings.trim && !(edit && edit.crop) && !wantAnimated;
-
-  // Промежуточный проход в raw: нужен, когда следующий шаг зависит от точных размеров
-  // или когда sharp не умеет выполнить операции в одном pipeline.
-  const rawPass = async (pipeline) => {
-    const { data, info } = await pipeline.raw().toBuffer({ resolveWithObject: true });
-    dims = { width: info.width, height: info.height };
-    return sharp(data, { raw: { width: info.width, height: info.height, channels: info.channels } });
+  const applyGeometry = (pipeline) => {
+    let p = pipeline;
+    if (geo.flop) p = p.flop();
+    if (geo.rotate) p = p.rotate(geo.rotate);
+    return p;
   };
 
-  if (exif && userTransform) img = await rawPass(img.rotate());
-  else if (exif) img = img.rotate();
+  let dims = { width: Math.round(logical.width * k), height: Math.round(logical.height * k) };
+  let crop = k !== 1 ? computeCrop(dims.width, dims.height, edit, settings.crop) : logicalCrop;
 
-  if (userTransform) {
-    // sharp зеркалит до поворота; редактор в интерфейсе использует ту же семантику.
-    if (edit.flipH) img = img.flop();
-    if (edit.flipV) img = img.flip();
-    if (edit.rotate) img = img.rotate(edit.rotate);
-  }
-
-  if (useTrim) img = await rawPass(img.trim({ threshold: 10 }));
-
-  const crop = useTrim || k !== 1 ? computeCrop(dims.width, dims.height, edit, settings.crop) : logicalCrop;
-  let effectiveResize = resize;
+  // Обрезка полей: пробный проход только для поиска границ, сам результат
+  // строится обычным кропом из исходника — с метаданными.
+  const useTrim = settings.trim && !(edit && edit.crop) && !wantAnimated;
+  let trimRect = null;
   if (useTrim) {
-    const cs = cropSize(crop, dims.width, dims.height);
-    effectiveResize = computeResize(cs.width / k, cs.height / k, settings.resize, variant);
+    const { info } = await applyGeometry(sharp(input, inputOpts)).trim({ threshold: 10 }).raw().toBuffer({ resolveWithObject: true });
+    const left = Math.max(0, -(info.trimOffsetLeft || 0));
+    const top = Math.max(0, -(info.trimOffsetTop || 0));
+    if (info.width < dims.width || info.height < dims.height) {
+      trimRect = { left, top, width: Math.min(info.width, dims.width - left), height: Math.min(info.height, dims.height - top) };
+      dims = { width: trimRect.width, height: trimRect.height };
+      crop = computeCrop(dims.width, dims.height, edit, settings.crop);
+      const cs = cropSize(crop, dims.width, dims.height);
+      resize = computeResize(cs.width / k, cs.height / k, settings.resize, variant);
+    }
   }
 
-  if (crop && crop.rect) img = img.extract(crop.rect);
+  let img = applyGeometry(sharp(input, inputOpts));
+
+  // Один extract: кроп внутри обрезанных полей.
+  let rect = crop && crop.rect ? { ...crop.rect } : null;
+  if (trimRect) {
+    rect = rect ? { ...rect, left: rect.left + trimRect.left, top: rect.top + trimRect.top } : trimRect;
+  }
+  if (rect) img = img.extract(rect);
 
   const kernel = settings.pixelArt ? sharp.kernel.nearest : sharp.kernel.lanczos3;
   const bg = hexToRgb(settings.background);
 
   if (crop && crop.smart) {
+    if (trimRect && !rect) img = img.extract(trimRect);
     // Умный кроп и масштаб в одном resize: sharp сам найдёт важную область.
-    const scaled = effectiveResize ? computeSmartTarget(crop.width, crop.height, effectiveResize) : { width: crop.width, height: crop.height };
+    const scaled = resize ? computeSmartTarget(crop.width, crop.height, resize) : { width: crop.width, height: crop.height };
     img = img.resize({ width: scaled.width, height: scaled.height, fit: 'cover', position: crop.smart, kernel });
-  } else if (effectiveResize) {
-    img = img.resize({ ...effectiveResize, kernel, background: { ...bg, alpha: target.alpha ? 0 : 1 } });
+  } else if (resize) {
+    img = img.resize({ ...resize, kernel, background: { ...bg, alpha: target.alpha ? 0 : 1 } });
   }
 
-  if (settings.sharpen && effectiveResize) img = img.sharpen({ sigma: 0.5 });
+  if (settings.sharpen && resize) img = img.sharpen({ sigma: 0.5 });
   if (settings.grayscale) img = img.grayscale();
   if (!target.alpha) img = img.flatten({ background: bg });
 
-  if (settings.metadata === 'keep') img = img.withMetadata(exif ? { orientation: 1 } : {});
+  if (settings.metadata === 'keep') {
+    const opts = {};
+    // Ориентация уже применена к пикселям — тег сбрасываем, иначе просмотрщик повернёт ещё раз.
+    if (geo.exifApplied) opts.orientation = 1;
+    if (meta.density && !meta.isSvg) opts.density = meta.density;
+    img = img.withMetadata(opts);
+  }
 
   return { img, animated: wantAnimated };
 }
@@ -319,4 +354,4 @@ async function renderImage(input, meta, settings, edit, target, variant = {}) {
   return { buffer: data, width: info.width, height };
 }
 
-module.exports = { readMeta, renderImage, orientedSize, computeCrop, computeResize, INPUT_OPTIONS };
+module.exports = { readMeta, renderImage, orientedSize, geometryFor, computeCrop, computeResize, INPUT_OPTIONS };

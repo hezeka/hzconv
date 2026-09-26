@@ -9,6 +9,8 @@ const sharp = require('sharp');
 const { spawnSync } = require('child_process');
 
 const { Runner, estimate } = require('../src/main/runner');
+const { BatchController, scan } = require('../src/main/batch');
+const { withExif } = require('./helpers/exif');
 const FileManager = require('../src/main/utils/fileManager');
 const { renderName } = require('../src/main/output');
 const { probeMedia, buildArgs } = require('../src/main/pipeline/media');
@@ -75,11 +77,12 @@ test('поиск файлов: только поддерживаемые, фил
   const names = all.map((p) => path.basename(p)).sort();
   assert.deepEqual(names, ['alpha.png', 'anim.gif', 'clip.mp4', 'icon.svg', 'rotated.jpg', 'tone.wav']);
 
-  const onlyDeep = await FileManager.getFilesFromDirectory(src(), { recursive: true, subfolders: [src('nested', 'deep')] });
-  assert.deepEqual(onlyDeep.map((p) => path.basename(p)), ['icon.svg']);
+  // Отключённая папка не отключает вложенные: новые папки по умолчанию остаются включены
+  const noNestedFiles = await FileManager.getFilesFromDirectory(src(), { recursive: true, excluded: ['nested'] });
+  assert.deepEqual(noNestedFiles.filter((p) => p.includes('nested')).map((p) => path.basename(p)), ['icon.svg']);
 
-  const rootOnly = await FileManager.getFilesFromDirectory(src(), { recursive: true, subfolders: [src()] });
-  assert.ok(!rootOnly.some((p) => p.includes('nested')));
+  const noRootFiles = await FileManager.getFilesFromDirectory(src(), { recursive: true, excluded: ['', 'nested/deep'] });
+  assert.deepEqual(noRootFiles.map((p) => path.basename(p)), ['alpha.png']);
 
   const noNested = await FileManager.getFilesFromDirectory(src(), { recursive: true, exclude: ['nested'] });
   assert.ok(!noNested.some((p) => p.includes('nested')));
@@ -232,4 +235,82 @@ test('шаблон имени: запрещённые символы и пуст
   assert.equal(renderName('{name}', { name: 'pic', suffix: '@2x' }), 'pic@2x');
   assert.equal(renderName('', { name: 'x' }), 'x');
   assert.equal(renderName('{date}', { name: 'x', date: '2026-01-02' }), '2026-01-02');
+});
+
+test('метаданные: EXIF сохраняется при повороте и обрезке полей, удаляется по умолчанию', async () => {
+  const outDir = path.join(dir, 'out-meta');
+  const base = await sharp({ create: { width: 400, height: 200, channels: 3, background: '#c04020' } })
+    .composite([{ input: { create: { width: 40, height: 40, channels: 3, background: '#ffffff' } }, left: 180, top: 80 }])
+    .jpeg()
+    .withMetadata({ density: 300 })
+    .toBuffer();
+  const file = path.join(dir, 'camera.jpg');
+  await fs.writeFile(file, withExif(base, { make: 'TestCam', orientation: 6, density: 300 }));
+
+  const hasMake = async (p) => {
+    const m = await sharp(p).metadata();
+    return Boolean(m.exif && m.exif.includes('TestCam'));
+  };
+
+  const cases = [
+    ['keep', { metadata: 'keep', format: 'jpg' }, null, true],
+    ['keep+rotate', { metadata: 'keep', format: 'jpg' }, { rotate: 90 }, true],
+    ['keep+trim', { metadata: 'keep', format: 'jpg', trim: true }, null, true],
+    ['strip', { metadata: 'strip', format: 'jpg' }, null, false]
+  ];
+  for (const [label, image, edit, keep] of cases) {
+    const { results } = await convert([{ path: file, edit }], { image, output: { location: 'custom', customDir: path.join(outDir, label) } });
+    const out = results[0].outputs[0].path;
+    const m = await sharp(out).metadata();
+    assert.equal(await hasMake(out), keep, `${label}: EXIF`);
+    assert.ok(!m.orientation || m.orientation === 1, `${label}: тег ориентации должен быть сброшен`);
+    if (keep) assert.equal(m.density, 300, `${label}: DPI`);
+  }
+
+  // Без автоповорота и с удалением метаданных фото всё равно не должно лечь на бок
+  const { results } = await convert([file], { image: { format: 'png', metadata: 'strip', autoOrient: false }, output: { location: 'custom', customDir: path.join(outDir, 'no-orient') } });
+  assert.equal(results[0].outputs[0].width, 200);
+  assert.equal(results[0].outputs[0].height, 400);
+});
+
+test('пакетное задание: cards_png → ../cards со структурой, исключения, только изменённые', async () => {
+  const img = path.join(dir, 'img');
+  const source = path.join(img, 'cards_png');
+  for (const set of ['set-a', 'set-b', 'set-b/inner', 'drafts']) {
+    await fs.ensureDir(path.join(source, set));
+    await sharp({ create: { width: 64, height: 64, channels: 4, background: '#3366ff' } }).png().toFile(path.join(source, set, 'card.png'));
+  }
+  await sharp({ create: { width: 64, height: 64, channels: 3, background: '#ff6633' } }).jpeg().toFile(path.join(source, 'set-a', 'photo.jpg'));
+
+  const settings = {
+    image: { format: 'webp' },
+    output: { location: 'custom', customDir: '../cards', preserveStructure: true, conflict: 'newer' }
+  };
+  const job = { dir: source, recursive: true, excluded: ['drafts'] };
+
+  const stats = await scan(job, settings);
+  assert.equal(stats.count, 4);
+  assert.equal(stats.byType.image, 4);
+
+  const events = [];
+  const controller = new BatchController(new Runner(), (ch, payload) => events.push([ch, payload]));
+  const first = await controller.start({ source: job, settings });
+  assert.equal(first.done, 4);
+  assert.equal(first.failed, 0);
+  const made = (await FileManager.getFilesFromDirectory(path.join(img, 'cards'), { recursive: true })).map((p) => path.relative(path.join(img, 'cards'), p).split(path.sep).join('/'));
+  assert.deepEqual(made, ['set-a/card.webp', 'set-a/photo.webp', 'set-b/card.webp', 'set-b/inner/card.webp']);
+  assert.ok(events.some(([ch]) => ch === 'batch:progress'));
+
+  // Повторный запуск: всё актуально — ничего не пересчитывается
+  const second = await controller.start({ source: job, settings });
+  assert.equal(second.skipped, 4);
+  assert.equal(second.done, 0);
+
+  // Изменили один исходник — обновится только он
+  const touched = path.join(source, 'set-b', 'card.png');
+  const future = new Date(Date.now() + 60_000);
+  await fs.utimes(touched, future, future);
+  const third = await controller.start({ source: job, settings });
+  assert.equal(third.done, 1);
+  assert.equal(third.skipped, 3);
 });

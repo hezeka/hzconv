@@ -82,18 +82,35 @@ class PathReserver {
   }
 
   /**
-   * Возвращает свободный путь или null, если по политике файл надо пропустить.
-   * sourcePath — исходник: его перезапись разрешена только при политике overwrite.
+   * Возвращает путь для записи или null, если по политике файл надо пропустить.
+   * policy: rename | overwrite | skip | newer (перезаписать, только если исходник новее результата).
    */
-  claim(dir, baseName, ext, policy) {
+  claim(dir, baseName, ext, policy, sourceMtime = 0) {
     const first = path.join(dir, `${baseName}.${ext}`);
     const k = this.key(first);
-    if (!this.reserved.has(k) && !fs.existsSync(first)) {
+    const reserved = this.reserved.has(k);
+    let exists = false;
+    let outMtime = 0;
+    if (!reserved) {
+      try {
+        outMtime = fs.statSync(first).mtimeMs;
+        exists = true;
+      } catch {
+        exists = false;
+      }
+    }
+    if (!reserved && !exists) {
       this.reserved.add(k);
       return first;
     }
     if (policy === 'skip') return null;
-    if (policy === 'overwrite' && !this.reserved.has(k)) {
+    if (policy === 'newer' && !reserved) {
+      // Секундный допуск: FAT/exFAT и сетевые диски хранят время с округлением.
+      if (outMtime + 1000 >= sourceMtime) return null;
+      this.reserved.add(k);
+      return first;
+    }
+    if (policy === 'overwrite' && !reserved) {
       this.reserved.add(k);
       return first;
     }

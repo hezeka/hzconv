@@ -202,7 +202,7 @@ async function loadPreview() {
       edit: { rotate: edit.rotate, flipH: edit.flipH, flipV: edit.flipV },
       maxSize: 1800,
       time: it.type === 'video' ? time.value : null,
-      autoOrient: settings.image.autoOrient
+      autoOrient: settings.image.autoOrient || settings.image.metadata !== 'keep'
     });
     if (my !== loadSeq) return;
     src.value = res.dataUrl;
@@ -694,6 +694,24 @@ function close() {
   gap: 12px;
   padding: 14px 16px 16px;
   border-top: 1px solid var(--line);
+}
+
+@media (max-width: 760px) {
+  .ce {
+    flex-direction: column;
+  }
+  .ce-stage {
+    min-height: 220px;
+  }
+  .ce-side {
+    width: 100%;
+    max-height: 46%;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  .ce-side__spacer {
+    display: none;
+  }
 }
 
 .ce-side__buttons {

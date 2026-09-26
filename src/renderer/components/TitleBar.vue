@@ -2,15 +2,23 @@
   <header class="titlebar" @dblclick.self="toggleMax">
     <div class="titlebar__brand">
       <img class="titlebar__logo" src="../assets/logo.png" alt="" draggable="false" />
-      <span class="titlebar__name">Hzconv</span>
+      <span v-if="!ui.narrow" class="titlebar__name">Hzconv</span>
     </div>
 
-    <div class="titlebar__status" @dblclick="toggleMax">
-      <template v-if="queue.running">
+    <div class="titlebar__center" @dblclick.self="toggleMax">
+      <UiSegmented
+        v-model="ui.mode"
+        small
+        class="titlebar__mode"
+        :options="[
+          { value: 'files', label: ui.narrow ? '' : 'Файлы', icon: 'files', hint: 'Штучно: очередь, превью, кадрирование', disabled: busy && ui.mode !== 'files' },
+          { value: 'batch', label: ui.narrow ? '' : 'Пакет', icon: 'layers', hint: 'Пакетно: сохранённые задания для папок', disabled: busy && ui.mode !== 'batch' }
+        ]"
+      />
+      <span v-if="busy && !ui.compact" class="titlebar__status">
         <span class="titlebar__pulse" />
-        <span>Конвертация</span>
-        <span class="num faint">{{ doneCount }} / {{ queue.runIds.length }}</span>
-      </template>
+        <span class="num">{{ statusText }}</span>
+      </span>
     </div>
 
     <div class="titlebar__actions">
@@ -33,6 +41,8 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { api, platform } from '../api';
 import { ui } from '../store/ui';
 import { queue } from '../store/queue';
+import { batch } from '../store/batch';
+import UiSegmented from './ui/UiSegmented.vue';
 import Icon from './ui/Icon.vue';
 import UiButton from './ui/UiButton.vue';
 
@@ -48,9 +58,16 @@ const toggleMax = () => {
   if (platform !== 'darwin') api.window('toggle-maximize');
 };
 
-const doneCount = computed(() => {
+const busy = computed(() => queue.running || batch.running);
+const nf = new Intl.NumberFormat('ru-RU');
+const statusText = computed(() => {
+  if (batch.running) {
+    const p = batch.progress;
+    return p ? `${nf.format(p.done + p.failed + p.skipped + p.cancelled)} / ${nf.format(p.total)}` : '';
+  }
   const ids = new Set(queue.runIds);
-  return queue.items.filter((it) => ids.has(it.id) && ['done', 'error', 'skipped', 'cancelled'].includes(it.status)).length;
+  const done = queue.items.filter((it) => ids.has(it.id) && ['done', 'error', 'skipped', 'cancelled'].includes(it.status)).length;
+  return `${done} / ${queue.runIds.length}`;
 });
 
 const order = ['system', 'light', 'dark'];
@@ -76,6 +93,11 @@ const cycleTheme = () => {
   padding-left: 84px;
 }
 
+.is-narrow .titlebar {
+  gap: 6px;
+  padding-left: 12px;
+}
+
 /* Место под нативные кнопки Windows (titleBarOverlay) */
 .os-win32 .titlebar {
   padding-right: 146px;
@@ -99,11 +121,27 @@ const cycleTheme = () => {
   letter-spacing: -0.01em;
 }
 
-.titlebar__status {
+.titlebar__center {
   flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 14px;
+}
+
+.titlebar__mode {
+  -webkit-app-region: no-drag;
+  flex: none;
+}
+
+.titlebar__mode :deep(.seg__item) {
+  padding: 0 12px;
+}
+
+.titlebar__status {
+  display: flex;
+  align-items: center;
   gap: 8px;
   font-size: 12px;
   color: var(--text-2);

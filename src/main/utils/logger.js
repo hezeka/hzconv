@@ -1,5 +1,6 @@
 // src/main/utils/logger.js
 const path = require('path');
+const fs = require('fs');
 
 // ANSI цветовые коды
 const colors = {
@@ -22,6 +23,30 @@ class Logger {
   constructor(debugMode = false) {
     this.debugMode = debugMode;
     this.lastOutputDir = null;
+    this.file = null;
+    this.verbose = debugMode || process.env.NODE_ENV === 'development';
+  }
+
+  /**
+   * Журнал ошибок в файл — чтобы пользователь мог прислать его при проблеме.
+   * При превышении 2 МБ старый журнал переименовывается в .old.
+   */
+  setFile(filePath) {
+    try {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      if (fs.existsSync(filePath) && fs.statSync(filePath).size > 2 * 1024 * 1024) {
+        fs.renameSync(filePath, `${filePath}.old`);
+      }
+      this.file = filePath;
+    } catch {
+      this.file = null;
+    }
+  }
+
+  write(level, message) {
+    if (!this.file) return;
+    const line = `${new Date().toISOString()} ${level} ${message}\n`;
+    fs.appendFile(this.file, line, () => {});
   }
 
   /**
@@ -62,6 +87,7 @@ class Logger {
    * Выводит информацию о создании директории
    */
   dirCreated(dirPath) {
+    if (!this.verbose) return;
     console.log(`${colors.green}[✓]${colors.reset} ${colors.cyan}Создана директория:${colors.reset} ${colors.bright}${dirPath}${colors.reset}`);
     this.lastOutputDir = dirPath;
   }
@@ -70,6 +96,8 @@ class Logger {
    * Выводит информацию о конвертации файла
    */
   fileConverted(inputPath, outputPath) {
+    // На десятках тысяч файлов построчный лог только мешает — выводим его при отладке.
+    if (!this.verbose) return;
     const formattedInput = this.formatPath(inputPath);
     const formattedOutput = this.formatPath(outputPath);
     const arrow = `${colors.gray}→${colors.reset}`;
@@ -90,6 +118,7 @@ class Logger {
    * Выводит информацию об ошибке
    */
   fileError(filePath, error) {
+    this.write('ERROR', `${filePath}: ${error}`);
     const formatted = this.formatPath(filePath);
     console.log(`${colors.red}[✗]${colors.reset} Ошибка: ${formatted}`);
     if (this.debugMode) {
@@ -101,6 +130,7 @@ class Logger {
    * Выводит начало конвертации директории
    */
   directoryStart(dirPath, totalFiles) {
+    this.write('INFO', `Пакет: ${dirPath}, файлов: ${totalFiles}`);
     console.log(`\n${colors.bright}${colors.cyan}━━━ Конвертация директории ━━━${colors.reset}`);
     console.log(`${colors.blue}[i]${colors.reset} Исходная директория: ${colors.cyan}${dirPath}${colors.reset}`);
     console.log(`${colors.blue}[i]${colors.reset} Всего файлов: ${colors.bright}${totalFiles}${colors.reset}\n`);
@@ -110,6 +140,7 @@ class Logger {
    * Выводит завершение конвертации директории
    */
   directoryComplete(successCount, errorCount, totalFiles) {
+    this.write('INFO', `Пакет завершён: успешно ${successCount}, ошибок ${errorCount} из ${totalFiles}`);
     console.log(`\n${colors.bright}${colors.cyan}━━━ Конвертация завершена ━━━${colors.reset}`);
     console.log(`${colors.green}[✓]${colors.reset} Успешно: ${colors.bright}${successCount}${colors.reset}/${totalFiles}`);
     if (errorCount > 0) {
@@ -145,6 +176,7 @@ class Logger {
    * Лог ошибки
    */
   error(message, details = null) {
+    this.write('ERROR', details ? `${message}: ${details}` : message);
     console.log(`${colors.red}[✗]${colors.reset} ${message}`);
     if (details && this.debugMode) {
       console.log(`${colors.dim}    ${details}${colors.reset}`);

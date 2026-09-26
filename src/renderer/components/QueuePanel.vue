@@ -9,19 +9,24 @@
           <UiButton variant="ghost" size="s" icon="plus" title="Добавить файлы (Ctrl+O)" :disabled="queue.running" @click="addFiles" />
           <UiButton variant="ghost" size="s" icon="folder" title="Добавить папку (Ctrl+Shift+O)" :disabled="queue.running" @click="addFolder" />
           <span class="queue__sep" />
-          <UiButton v-if="counts.done" variant="ghost" size="s" :disabled="queue.running" @click="removeFinished">Убрать готовые</UiButton>
+          <UiButton v-if="counts.done" variant="ghost" size="s" :icon="ui.narrow ? 'check' : ''" title="Убрать готовые" :disabled="queue.running" @click="removeFinished">{{ ui.narrow ? '' : 'Убрать готовые' }}</UiButton>
           <UiButton variant="ghost" size="s" icon="trash" title="Очистить очередь" :disabled="queue.running" @click="clearQueue" />
         </div>
       </div>
 
-      <div ref="list" class="queue__list" role="listbox" aria-label="Очередь файлов">
-        <QueueRow v-for="item in visibleItems" :key="item.id" :item="item" />
+      <div ref="list" class="queue__list" role="listbox" aria-label="Очередь файлов" @scroll="onScroll">
+        <!-- Рендерятся только видимые строки: очередь на тысячи файлов не тормозит -->
+        <div class="queue__spacer" :style="{ height: `${visibleItems.length * ROW}px` }">
+          <div class="queue__window" :style="{ transform: `translateY(${range.start * ROW}px)` }">
+            <QueueRow v-for="item in windowItems" :key="item.id" :item="item" />
+          </div>
+        </div>
         <div v-if="!visibleItems.length" class="queue__nothing">Нет файлов этого типа</div>
       </div>
 
       <footer class="queue__footer">
         <template v-if="queue.summary && !queue.running">
-          <div class="sum">
+          <div class="sum" :class="{ 'sum--narrow': ui.narrow }">
             <Icon :name="summaryIcon" :size="15" :class="`sum__icon sum__icon--${summaryKind}`" />
             <span>
               Готово <b class="num">{{ queue.summary.done }}</b> из <span class="num">{{ queue.summary.total }}</span>
@@ -43,7 +48,7 @@
           <div class="sum faint">
             <span>{{ files(counts.all) }}</span>
             <span class="num">{{ formatBytes(counts.bytes) }}</span>
-            <span v-if="!queue.running" class="queue__hint">Двойной щелчок — кадрирование, пробел — предпросмотр</span>
+            <span v-if="!queue.running && !ui.compact" class="queue__hint">Двойной щелчок — кадрирование, пробел — предпросмотр</span>
           </div>
         </template>
       </footer>
@@ -52,10 +57,11 @@
 </template>
 
 <script setup>
-import { computed } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { api } from '../api';
 import { queue, counts, visibleItems, clearQueue, removeFinished, retryFailed } from '../store/queue';
 import { useAddActions } from '../composables/useAddActions';
+import { ui } from '../store/ui';
 import { files, formatBytes, formatDelta, formatElapsed } from '../utils/format';
 import Icon from './ui/Icon.vue';
 import UiButton from './ui/UiButton.vue';
@@ -65,10 +71,50 @@ import EmptyState from './EmptyState.vue';
 
 const { addFiles, addFolder } = useAddActions();
 
+// ——— Виртуальный список ———
+const ROW = 58;
+const list = ref(null);
+const scrollTop = ref(0);
+const viewport = ref(600);
+let ro = null;
+
+const range = computed(() => {
+  const start = Math.max(0, Math.floor(scrollTop.value / ROW) - 6);
+  const end = Math.min(visibleItems.value.length, Math.ceil((scrollTop.value + viewport.value) / ROW) + 6);
+  return { start, end };
+});
+const windowItems = computed(() => visibleItems.value.slice(range.value.start, range.value.end));
+
+function onScroll() {
+  scrollTop.value = list.value.scrollTop;
+}
+
+function reveal(e) {
+  const el = list.value;
+  if (!el) return;
+  const top = e.detail * ROW;
+  if (top < el.scrollTop) el.scrollTop = top;
+  else if (top + ROW > el.scrollTop + el.clientHeight) el.scrollTop = top + ROW - el.clientHeight + 8;
+}
+
+watch(list, (el) => {
+  ro?.disconnect();
+  if (!el) return;
+  ro = new ResizeObserver(() => (viewport.value = el.clientHeight));
+  ro.observe(el);
+  scrollTop.value = el.scrollTop;
+});
+watch(() => queue.filter, () => list.value && (list.value.scrollTop = 0));
+onMounted(() => window.addEventListener('queue:reveal', reveal));
+onBeforeUnmount(() => {
+  window.removeEventListener('queue:reveal', reveal);
+  ro?.disconnect();
+});
+
 const filterOptions = computed(() => {
   const c = counts.value;
   const opts = [{ value: 'all', label: 'Все', count: c.all }];
-  if (c.image) opts.push({ value: 'image', label: 'Изображения', count: c.image });
+  if (c.image) opts.push({ value: 'image', label: ui.narrow ? 'Фото' : 'Изображения', count: c.image });
   if (c.video) opts.push({ value: 'video', label: 'Видео', count: c.video });
   if (c.audio) opts.push({ value: 'audio', label: 'Аудио', count: c.audio });
   return opts;
@@ -113,6 +159,13 @@ function revealOutput() {
 
 .queue__filter {
   flex: 0 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.queue__filter::-webkit-scrollbar {
+  display: none;
 }
 
 .queue__filter :deep(.seg__item) {
@@ -141,6 +194,14 @@ function revealOutput() {
   padding: 4px 0;
 }
 
+.queue__spacer {
+  position: relative;
+}
+
+.queue__window {
+  will-change: transform;
+}
+
 .queue__nothing {
   padding: 40px;
   text-align: center;
@@ -165,6 +226,11 @@ function revealOutput() {
   gap: 14px;
   white-space: nowrap;
   overflow: hidden;
+}
+
+.sum--narrow .sum__bytes + *,
+.sum--narrow > .faint {
+  display: none;
 }
 
 .sum b {

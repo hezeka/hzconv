@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('hz', {
   expandPaths: (params) => invoke('fs:expand', params),
   scanFolder: (params) => invoke('fs:scan-folder', params),
   getSubfolders: (params) => invoke('fs:subfolders', params),
+  pathKind: (path) => invoke('fs:kind', path),
 
   inspect: (paths) => invoke('media:inspect', paths),
   details: (path) => invoke('media:details', path),
@@ -42,6 +43,13 @@ contextBridge.exposeInMainWorld('hz', {
   cancel: () => invoke('convert:cancel'),
   onProgress: subscribe('convert:progress'),
   onItem: subscribe('convert:item'),
+
+  batchScan: (params) => invoke('batch:scan', params),
+  batchStart: (params) => invoke('batch:start', params),
+  onBatchProgress: subscribe('batch:progress'),
+  previewOutput: (params) => invoke('output:preview', params),
+  openLogs: () => invoke('app:open-logs'),
+  onEngineCrash: subscribe('engine:crash'),
 
   reveal: (path) => invoke('shell:reveal', path),
   openPath: (path) => invoke('shell:open', path),
