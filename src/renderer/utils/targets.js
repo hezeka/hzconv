@@ -1,7 +1,7 @@
 import formats from '../../shared/formats.json';
 
 const ORIGINAL = {
-  image: { jpeg: 'jpg', jpe: 'jpg', jfif: 'jpg', tif: 'tiff', svg: 'png' },
+  image: { jpeg: 'jpg', jpe: 'jpg', jfif: 'jpg', tif: 'tiff', svg: 'png', heic: 'jpg', heif: 'jpg', hif: 'jpg' },
   video: { m4v: 'mp4' },
   audio: { aac: 'm4a', oga: 'ogg', aif: 'wav', aiff: 'wav' }
 };

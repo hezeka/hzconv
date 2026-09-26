@@ -1,62 +1,56 @@
 <template>
-  <div>
-    <UiSection title="Куда сохранять">
-      <UiSegmented v-model="o.location" :options="locations" />
+  <UiSection title="Сохранение" data-island="save">
+    <UiSegmented v-model="o.location" :options="locations" />
 
-      <UiField v-if="o.location === 'subdir'" label="Имя подпапки">
-        <UiInput v-model="o.subDir" mono placeholder="converted" />
-      </UiField>
+    <p v-if="o.location === 'source'" class="note">Файлы появятся рядом с исходными.</p>
 
-      <template v-if="o.location === 'custom'">
-        <div class="dir">
-          <UiInput v-model="o.customDir" mono placeholder="Путь или относительный путь, например ../export" />
-          <UiButton icon="folder-open" title="Выбрать папку" @click="pickDir" />
-        </div>
-        <p class="note">{{ ui.mode === 'batch' ? 'Относительный путь отсчитывается от папки задания: ../cards — соседняя папка cards.' : 'Относительный путь отсчитывается от папки исходного файла или добавленной папки.' }}</p>
-      </template>
+    <UiField v-else-if="o.location === 'subdir'" label="Имя подпапки" hint="Рядом с исходными">
+      <UiInput v-model="o.subDir" mono placeholder="converted" />
+    </UiField>
 
-      <UiSwitch v-if="o.location !== 'source'" v-model="o.preserveStructure" :hint="ui.mode === 'batch' ? 'Подпапки задания повторятся в папке результата' : 'Для файлов, добавленных папкой: вложенные папки повторятся в результате'">
-        Сохранять структуру папок
-      </UiSwitch>
-    </UiSection>
-
-    <UiSection title="Имя файла">
-      <UiInput v-model="o.template" mono placeholder="{name}" />
-      <div class="chips">
-        <button v-for="t in tokens" :key="t.token" type="button" class="chip mono" :title="t.hint" @click="insert(t.token)">{{ t.token }}</button>
+    <template v-else>
+      <div class="dir">
+        <UiInput v-model="o.customDir" mono placeholder="Путь, например D:\Фото или ../export" />
+        <UiButton icon="folder-open" title="Выбрать папку" @click="pickDir">Обзор</UiButton>
       </div>
-      <p class="note">
-        Пример: <span class="mono example">{{ example }}</span>
-      </p>
-    </UiSection>
+      <p class="note">{{ ui.mode === 'batch' ? 'Относительный путь считается от папки задания: ../cards — соседняя папка cards.' : 'Относительный путь считается от папки исходного файла.' }}</p>
+    </template>
 
-    <UiSection title="Если файл уже есть">
+    <UiSwitch v-if="o.location !== 'source'" v-model="o.preserveStructure" :hint="ui.mode === 'batch' ? 'Подпапки задания повторятся в папке результата' : 'Для папок, добавленных целиком'">
+      Сохранять структуру папок
+    </UiSwitch>
+
+    <UiField label="Если файл уже есть" stack>
       <UiSelect v-model="o.conflict" :options="conflicts" />
-      <p v-if="o.conflict === 'overwrite' && o.location === 'source'" class="note note--warn">
-        Если формат не меняется, исходники будут заменены результатом. Удобно для пакетного сжатия, но отменить нельзя.
-      </p>
-      <p v-else class="note">{{ conflictNote }}</p>
-    </UiSection>
+    </UiField>
+    <p v-if="o.conflict === 'overwrite' && o.location === 'source'" class="note note--warn">
+      Если формат не меняется, исходники будут заменены результатом. Отменить нельзя.
+    </p>
+    <p v-else class="note">{{ conflictNote }}</p>
+  </UiSection>
 
-    <UiSection title="После конвертации">
-      <UiSwitch v-model="o.keepDates" hint="Удобно для фотоархива: сортировка по дате не собьётся">Сохранять дату изменения</UiSwitch>
-      <UiSwitch v-model="o.openWhenDone">Открыть папку с результатом</UiSwitch>
-    </UiSection>
-
-    <UiSection title="Производительность" collapsible store-key="perf" :open="false" :summary="perfSummary">
-      <UiField label="Изображения" hint="Одновременно">
-        <UiSelect v-model="p.imageJobs" :options="imageJobOptions" />
-      </UiField>
-      <UiField label="Видео и аудио" hint="Одновременно">
-        <UiSelect v-model="p.mediaJobs" :options="mediaJobOptions" />
-      </UiField>
-      <p class="note">Видео кодируется во все ядра, поэтому по умолчанию — по одному файлу.</p>
-    </UiSection>
-
-    <div class="reset reset--pad">
+  <UiSection title="Имя файла и прочее" collapsible store-key="output-more" :open="false" :summary="moreSummary">
+    <UiField label="Имя файла" stack>
+      <UiInput v-model="o.template" mono placeholder="{name}" />
+    </UiField>
+    <div class="chips">
+      <button v-for="t in tokens" :key="t.token" type="button" class="chip mono" :title="t.hint" @click="insert(t.token)">{{ t.token }}</button>
+    </div>
+    <p class="note">
+      Пример: <span class="mono example">{{ example }}</span>
+    </p>
+    <UiSwitch v-model="o.keepDates" hint="Сортировка фотоархива по дате не собьётся">Сохранять дату изменения</UiSwitch>
+    <UiSwitch v-model="o.openWhenDone">Открыть папку с результатом</UiSwitch>
+    <UiField label="Фото" hint="Одновременно">
+      <UiSelect v-model="p.imageJobs" :options="imageJobOptions" />
+    </UiField>
+    <UiField label="Видео и аудио" hint="Одновременно">
+      <UiSelect v-model="p.mediaJobs" :options="mediaJobOptions" />
+    </UiField>
+    <div class="reset">
       <UiButton variant="ghost" size="s" icon="reset" @click="resetSection('output'), resetSection('performance')">Сбросить настройки сохранения</UiButton>
     </div>
-  </div>
+  </UiSection>
 </template>
 
 <script setup>
@@ -77,24 +71,24 @@ const p = settings.performance;
 
 const locations = [
   { value: 'source', label: 'Рядом' },
-  { value: 'subdir', label: 'Подпапка' },
-  { value: 'custom', label: 'Папка' }
+  { value: 'subdir', label: 'В подпапку' },
+  { value: 'custom', label: 'В папку' }
 ];
 
 const conflicts = [
   { value: 'newer', label: 'Обновить, если исходник изменился', hint: 'Для регулярных заданий: актуальные файлы пропускаются' },
   { value: 'rename', label: 'Сохранить рядом с номером', hint: 'photo_1.webp' },
-  { value: 'overwrite', label: 'Всегда заменять' },
-  { value: 'skip', label: 'Пропускать' }
+  { value: 'overwrite', label: 'Заменить' },
+  { value: 'skip', label: 'Пропустить' }
 ];
 
 const conflictNote = computed(
   () =>
     ({
-      newer: 'Повторный запуск обработает только новые и изменённые файлы — остальные пропускаются за секунды.',
-      rename: 'Новый файл получит суффикс: photo_1.webp',
-      overwrite: 'Существующий файл будет заменён',
-      skip: 'Файл не конвертируется, если результат уже есть'
+      newer: 'Повторный запуск обработает только новые и изменённые файлы.',
+      rename: 'Новый файл получит номер: photo_1.webp',
+      overwrite: 'Существующий файл будет заменён.',
+      skip: 'Файл не конвертируется, если результат уже есть.'
     })[o.conflict]
 );
 
@@ -120,6 +114,14 @@ const example = computed(() => {
   return `${name}.${fmt}`;
 });
 
+const moreSummary = computed(() => {
+  const parts = [];
+  if (o.template && o.template !== '{name}') parts.push(o.template);
+  if (o.keepDates) parts.push('даты');
+  if (o.openWhenDone) parts.push('открыть папку');
+  return parts.join(' · ');
+});
+
 async function pickDir() {
   const dir = await api.openFolder({ title: 'Папка для сохранения', defaultPath: o.customDir || undefined });
   if (dir) o.customDir = dir;
@@ -127,7 +129,6 @@ async function pickDir() {
 
 const imageJobOptions = [{ value: 0, label: 'Авто' }, ...[1, 2, 3, 4, 6, 8].map((n) => ({ value: n, label: String(n) }))];
 const mediaJobOptions = [1, 2, 3].map((n) => ({ value: n, label: String(n) }));
-const perfSummary = computed(() => `фото: ${p.imageJobs || 'авто'} · видео: ${p.mediaJobs}`);
 </script>
 
 <style scoped>
@@ -138,15 +139,10 @@ const perfSummary = computed(() => `фото: ${p.imageJobs || 'авто'} · в
 
 .dir > :first-child {
   flex: 1;
+  min-width: 0;
 }
 
 .example {
   color: var(--text-2);
-}
-
-.reset--pad {
-  padding: 8px 16px 16px;
-  margin: 0;
-  border-top: 1px solid var(--line);
 }
 </style>

@@ -5,6 +5,7 @@ const path = require('path');
 const sharp = require('sharp');
 const { getFileType, extOf } = require('./formats');
 const { readMeta, INPUT_OPTIONS } = require('./pipeline/image');
+const { imageInput, isHeifPath } = require('./pipeline/heif');
 const { probeMedia } = require('./pipeline/media');
 const { runToBuffer } = require('./ffmpeg');
 
@@ -71,7 +72,7 @@ async function inspect(paths) {
 }
 
 async function imageThumb(filePath, size) {
-  const buf = await sharp(filePath, { ...INPUT_OPTIONS, pages: 1 })
+  const buf = await sharp(await imageInput(filePath), { ...INPUT_OPTIONS, pages: 1 })
     .rotate()
     .resize(size, size, { fit: 'cover', position: 'attention' })
     .flatten({ background: '#1a1a1d' })
@@ -112,7 +113,7 @@ async function details(filePath, { thumbSize = 112 } = {}) {
     const type = getFileType(filePath);
     const info = { type, size: st.size };
     if (type === 'image') {
-      const m = await readMeta(filePath);
+      const m = await readMeta(await imageInput(filePath));
       const swap = m.orientation >= 5;
       Object.assign(info, {
         width: swap ? m.height : m.width,
@@ -120,7 +121,7 @@ async function details(filePath, { thumbSize = 112 } = {}) {
         frames: m.pages,
         animated: m.animated,
         hasAlpha: m.hasAlpha,
-        format: m.format
+        format: isHeifPath(filePath) ? 'heif' : m.format
       });
       info.thumb = await imageThumb(filePath, thumbSize).catch(() => null);
     } else if (type === 'video') {
@@ -150,9 +151,10 @@ async function preview(filePath, { edit = {}, maxSize = 1600, time = null, autoO
   let small;
 
   if (type === 'image') {
-    const m = await readMeta(filePath);
+    const input = await imageInput(filePath);
+    const m = await readMeta(input);
     full = autoOrient && m.orientation >= 5 ? { width: m.height, height: m.width } : { width: m.width, height: m.height };
-    let img = sharp(filePath, { ...INPUT_OPTIONS, pages: 1 });
+    let img = sharp(input, { ...INPUT_OPTIONS, pages: 1 });
     if (autoOrient) img = img.rotate();
     small = await img.resize(maxSize, maxSize, { fit: 'inside', withoutEnlargement: true }).raw().toBuffer({ resolveWithObject: true });
   } else if (type === 'video') {

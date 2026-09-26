@@ -1,6 +1,6 @@
 {
   "name": "hzconv",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "Конвертер изображений, видео и аудио",
   "main": "main.js",
   "scripts": {
@@ -26,12 +26,19 @@
       "src/icon.png",
       "package.json",
       "!**/node_modules/@img/sharp-*musl*/**",
-      "!**/node_modules/@img/sharp-wasm32/**"
+      "!**/node_modules/@img/sharp-wasm32/**",
+      "!**/node_modules/libheif-js/libheif/**",
+      "!**/node_modules/libheif-js/libheif-wasm/libheif.js",
+      "!**/node_modules/libheif-js/libheif-wasm/libheif.wasm",
+      "!**/node_modules/libheif-js/libheif-wasm/*.mjs",
+      "!**/node_modules/libheif-js/**/*.d.ts"
     ],
     "asarUnpack": [
       "**/node_modules/sharp/**/*",
       "**/node_modules/@img/**/*",
-      "**/node_modules/ffmpeg-static/**/*"
+      "**/node_modules/ffmpeg-static/**/*",
+      "**/node_modules/libheif-js/**/*",
+      "src/main/pipeline/heif-worker.js"
     ],
     "electronLanguages": [
       "ru",
@@ -81,6 +88,7 @@
     "ffmpeg-static": "^5.2.0",
     "fluent-ffmpeg": "^2.1.2",
     "fs-extra": "^11.1.1",
+    "libheif-js": "^1.23.2",
     "sharp": "^0.35.4"
   },
   "devDependencies": {

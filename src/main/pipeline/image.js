@@ -193,9 +193,13 @@ async function buildPipeline(input, meta, settings, edit, target, variant = {}) 
     throw new Error('Поворот на 90° не поддерживается для анимации — отключите «Сохранять анимацию»');
   }
 
+  // Рамка «Ш × В» сама задаёт пропорции, поэтому обрезка по пропорциям с ней не сочетается
+  // (в интерфейсе её в этом режиме и не видно).
+  const cropOpts = settings.resize?.mode === 'box' ? { ...settings.crop, aspect: 'none' } : settings.crop;
+
   // «Логические» размеры — в пикселях исходника (для SVG — при 72 dpi).
   const logical = orientedSize(meta, settings, edit);
-  const logicalCrop = computeCrop(logical.width, logical.height, edit, settings.crop);
+  const logicalCrop = computeCrop(logical.width, logical.height, edit, cropOpts);
   const cropSize = (c, fw, fh) => (c ? (c.rect ? { width: c.rect.width, height: c.rect.height } : { width: c.width, height: c.height }) : { width: fw, height: fh });
   const lBase = cropSize(logicalCrop, logical.width, logical.height);
   let resize = computeResize(lBase.width, lBase.height, settings.resize, variant);
@@ -220,7 +224,7 @@ async function buildPipeline(input, meta, settings, edit, target, variant = {}) 
   };
 
   let dims = { width: Math.round(logical.width * k), height: Math.round(logical.height * k) };
-  let crop = k !== 1 ? computeCrop(dims.width, dims.height, edit, settings.crop) : logicalCrop;
+  let crop = k !== 1 ? computeCrop(dims.width, dims.height, edit, cropOpts) : logicalCrop;
 
   // Обрезка полей: пробный проход только для поиска границ, сам результат
   // строится обычным кропом из исходника — с метаданными.
@@ -233,7 +237,7 @@ async function buildPipeline(input, meta, settings, edit, target, variant = {}) 
     if (info.width < dims.width || info.height < dims.height) {
       trimRect = { left, top, width: Math.min(info.width, dims.width - left), height: Math.min(info.height, dims.height - top) };
       dims = { width: trimRect.width, height: trimRect.height };
-      crop = computeCrop(dims.width, dims.height, edit, settings.crop);
+      crop = computeCrop(dims.width, dims.height, edit, cropOpts);
       const cs = cropSize(crop, dims.width, dims.height);
       resize = computeResize(cs.width / k, cs.height / k, settings.resize, variant);
     }

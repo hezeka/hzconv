@@ -48,7 +48,7 @@ const pick = (type, skip = []) =>
     .join('  ');
 
 const groups = [
-  { label: 'Изображения', list: pick('image', ['jpeg', 'jpe', 'jfif', 'tif']) },
+  { label: 'Изображения', list: pick('image', ['jpeg', 'jpe', 'jfif', 'tif', 'heif', 'hif']) },
   { label: 'Видео', list: pick('video', ['m4v', 'mpeg', 'mts', 'm2ts', 'ogv']) },
   { label: 'Аудио', list: pick('audio', ['oga', 'aif']) }
 ];

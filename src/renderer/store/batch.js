@@ -147,6 +147,8 @@ export async function changeJobDir() {
   if (!job) return;
   const dir = await api.openFolder({ title: 'Папка для пакетной обработки', defaultPath: job.source.dir || undefined });
   if (!dir || dir === job.source.dir) return;
+  // Имя, которое дали по названию прежней папки, переходит на новую; своё имя не трогаем.
+  if (job.name === basename(job.source.dir)) job.name = basename(dir) || job.name;
   job.source.dir = dir;
   job.source.excluded = [];
 }
@@ -230,7 +232,7 @@ export async function runJob({ onlyPaths = null } = {}) {
     return;
   }
   if (settings.output.location === 'custom' && !settings.output.customDir.trim()) {
-    toast('Укажите папку для сохранения во вкладке «Сохранение»', { kind: 'warn' });
+    toast('Укажите папку в блоке «Сохранение»', { kind: 'warn' });
     return;
   }
   batch.running = true;

@@ -1,6 +1,6 @@
 {
   "input": {
-    "image": ["jpg", "jpeg", "jpe", "jfif", "png", "webp", "avif", "tif", "tiff", "gif", "svg"],
+    "image": ["jpg", "jpeg", "jpe", "jfif", "png", "webp", "avif", "heic", "heif", "hif", "tif", "tiff", "gif", "svg"],
     "video": ["mp4", "m4v", "mov", "mkv", "webm", "avi", "flv", "wmv", "mpg", "mpeg", "ts", "mts", "m2ts", "3gp", "ogv"],
     "audio": ["mp3", "wav", "ogg", "oga", "opus", "flac", "m4a", "aac", "wma", "aif", "aiff", "amr"]
   },

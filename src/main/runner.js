@@ -7,6 +7,7 @@ const sharp = require('sharp');
 const EventEmitter = require('events');
 const { getFileType, extOf, resolveTarget, getOutputFormat, normalizeSettings } = require('./formats');
 const { readMeta, renderImage } = require('./pipeline/image');
+const { imageInput } = require('./pipeline/heif');
 const { probeMedia, buildArgs, runFfmpeg, CancelError } = require('./pipeline/media');
 const { renderName, resolveOutputDir, templateNeedsSize, PathReserver, tempPathFor, commitTemp, removeQuiet, today } = require('./output');
 const { toDataUrl } = require('./inspect');
@@ -239,7 +240,9 @@ class Runner extends EventEmitter {
 
   async runImage(job, settings, reserver, st) {
     const { item, plan, index } = job;
-    let meta = null; // читаем лениво: актуальные файлы пропускаются без декодирования
+    // Читаем лениво: актуальные файлы пропускаются без декодирования.
+    let meta = null;
+    let input = null;
     const fmt = getOutputFormat('image', plan.target.id);
     const target = { id: plan.target.id, alpha: fmt.alpha, animated: fmt.animated };
     const dir = resolveOutputDir(item, settings.output);
@@ -262,8 +265,11 @@ class Runner extends EventEmitter {
       }
       let tmp = null;
       try {
-        if (!meta) meta = await readMeta(item.path);
-        const r = await renderImage(item.path, meta, settings.image, item.edit, target, variant.params);
+        if (!meta) {
+          input = await imageInput(item.path);
+          meta = await readMeta(input);
+        }
+        const r = await renderImage(input, meta, settings.image, item.edit, target, variant.params);
         this.checkCancel();
         if (!finalPath) {
           finalPath = reserver.claim(dir, renderName(tpl, { ...vars, w: r.width, h: r.height }), plan.target.ext, settings.output.conflict, st.mtimeMs);
@@ -357,13 +363,14 @@ async function estimate(item, rawSettings, { maxDisplay = 2400 } = {}) {
   const settings = normalizeSettings(rawSettings);
   const plan = planItem(item, settings);
   if (plan.engine !== 'sharp') throw new Error('Предпросмотр доступен для изображений');
-  const meta = await readMeta(item.path);
+  const input = await imageInput(item.path);
+  const meta = await readMeta(input);
   const fmt = getOutputFormat('image', plan.target.id);
   const variant = variantsFor(plan, settings)[0];
   const st = await fs.stat(item.path);
 
-  const after = await renderImage(item.path, meta, settings.image, item.edit, { id: plan.target.id, alpha: fmt.alpha, animated: fmt.animated }, variant.params);
-  const before = await renderImage(item.path, meta, { ...settings.image, pngPalette: false, effort: 'fast', keepAnimation: false }, item.edit, { id: 'png', alpha: true }, variant.params);
+  const after = await renderImage(input, meta, settings.image, item.edit, { id: plan.target.id, alpha: fmt.alpha, animated: fmt.animated }, variant.params);
+  const before = await renderImage(input, meta, { ...settings.image, pngPalette: false, effort: 'fast', keepAnimation: false }, item.edit, { id: 'png', alpha: true }, variant.params);
 
   const tooBig = Math.max(after.width, after.height) > maxDisplay;
   const displayable = ['jpg', 'png', 'webp', 'avif', 'gif'].includes(plan.target.id);

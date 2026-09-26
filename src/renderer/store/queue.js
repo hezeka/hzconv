@@ -184,7 +184,7 @@ export async function startConversion(ids = null) {
     return;
   }
   if (settings.output.location === 'custom' && !settings.output.customDir.trim()) {
-    toast('Выберите папку для сохранения в разделе «Сохранение»', { kind: 'warn' });
+    toast('Укажите папку в блоке «Сохранение»', { kind: 'warn' });
     return;
   }
 
