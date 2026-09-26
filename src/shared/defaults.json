@@ -1,0 +1,83 @@
+{
+  "image": {
+    "format": "webp",
+    "quality": 82,
+    "lossless": false,
+    "pngPalette": false,
+    "colors": 256,
+    "effort": "balanced",
+    "resize": {
+      "mode": "none",
+      "percent": 50,
+      "width": 1920,
+      "height": 1080,
+      "fit": "inside",
+      "position": "centre",
+      "enlarge": false
+    },
+    "crop": {
+      "aspect": "none",
+      "customW": 4,
+      "customH": 5,
+      "position": "centre"
+    },
+    "trim": false,
+    "background": "#ffffff",
+    "variants": {
+      "enabled": false,
+      "items": [
+        { "kind": "x", "value": 1, "suffix": "@1x" },
+        { "kind": "x", "value": 2, "suffix": "@2x" },
+        { "kind": "x", "value": 3, "suffix": "@3x" }
+      ]
+    },
+    "icoSizes": [16, 32, 48, 256],
+    "metadata": "strip",
+    "autoOrient": true,
+    "pixelArt": false,
+    "sharpen": false,
+    "grayscale": false,
+    "progressive": true,
+    "keepAnimation": true
+  },
+  "video": {
+    "format": "mp4",
+    "codec": "h264",
+    "quality": "balanced",
+    "speed": "balanced",
+    "resolution": "original",
+    "customWidth": 1280,
+    "customHeight": 720,
+    "fps": "original",
+    "audio": "keep",
+    "audioBitrate": 160,
+    "trimStart": "",
+    "trimEnd": "",
+    "cropAspect": "none",
+    "gifFps": 15,
+    "gifWidth": 480
+  },
+  "audio": {
+    "format": "mp3",
+    "bitrate": 192,
+    "sampleRate": "original",
+    "channels": "original",
+    "normalize": false,
+    "trimStart": "",
+    "trimEnd": ""
+  },
+  "output": {
+    "location": "subdir",
+    "subDir": "converted",
+    "customDir": "",
+    "preserveStructure": true,
+    "template": "{name}",
+    "conflict": "rename",
+    "keepDates": false,
+    "openWhenDone": false
+  },
+  "performance": {
+    "imageJobs": 0,
+    "mediaJobs": 1
+  }
+}

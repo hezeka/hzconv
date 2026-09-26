@@ -1,0 +1,42 @@
+{
+  "input": {
+    "image": ["jpg", "jpeg", "jpe", "jfif", "png", "webp", "avif", "tif", "tiff", "gif", "svg"],
+    "video": ["mp4", "m4v", "mov", "mkv", "webm", "avi", "flv", "wmv", "mpg", "mpeg", "ts", "mts", "m2ts", "3gp", "ogv"],
+    "audio": ["mp3", "wav", "ogg", "oga", "opus", "flac", "m4a", "aac", "wma", "aif", "aiff", "amr"]
+  },
+  "output": {
+    "image": [
+      { "id": "original", "label": "Исходный", "ext": null },
+      { "id": "jpg", "label": "JPG", "ext": "jpg", "alpha": false, "quality": true },
+      { "id": "png", "label": "PNG", "ext": "png", "alpha": true, "quality": false },
+      { "id": "webp", "label": "WebP", "ext": "webp", "alpha": true, "quality": true, "lossless": true, "animated": true },
+      { "id": "avif", "label": "AVIF", "ext": "avif", "alpha": true, "quality": true, "lossless": true },
+      { "id": "tiff", "label": "TIFF", "ext": "tiff", "alpha": true, "quality": false },
+      { "id": "gif", "label": "GIF", "ext": "gif", "alpha": true, "quality": false, "animated": true },
+      { "id": "ico", "label": "ICO", "ext": "ico", "alpha": true, "quality": false },
+      { "id": "mp4", "label": "MP4", "ext": "mp4", "alpha": false, "fromGifOnly": true },
+      { "id": "webm", "label": "WebM", "ext": "webm", "alpha": false, "fromGifOnly": true }
+    ],
+    "video": [
+      { "id": "original", "label": "Исходный", "ext": null },
+      { "id": "mp4", "label": "MP4", "ext": "mp4" },
+      { "id": "webm", "label": "WebM", "ext": "webm" },
+      { "id": "mov", "label": "MOV", "ext": "mov" },
+      { "id": "mkv", "label": "MKV", "ext": "mkv" },
+      { "id": "avi", "label": "AVI", "ext": "avi" },
+      { "id": "gif", "label": "GIF", "ext": "gif" },
+      { "id": "mp3", "label": "MP3", "ext": "mp3", "audioOnly": true },
+      { "id": "m4a", "label": "M4A", "ext": "m4a", "audioOnly": true },
+      { "id": "wav", "label": "WAV", "ext": "wav", "audioOnly": true }
+    ],
+    "audio": [
+      { "id": "original", "label": "Исходный", "ext": null },
+      { "id": "mp3", "label": "MP3", "ext": "mp3", "lossy": true },
+      { "id": "m4a", "label": "M4A", "ext": "m4a", "lossy": true },
+      { "id": "ogg", "label": "OGG", "ext": "ogg", "lossy": true },
+      { "id": "opus", "label": "Opus", "ext": "opus", "lossy": true },
+      { "id": "flac", "label": "FLAC", "ext": "flac", "lossy": false },
+      { "id": "wav", "label": "WAV", "ext": "wav", "lossy": false }
+    ]
+  }
+}

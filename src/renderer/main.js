@@ -1,8 +1,8 @@
 import { createApp } from 'vue';
-import ElementPlus from 'element-plus';
-import '../electron.css';
+import '@fontsource-variable/onest/wght.css';
+import '@fontsource-variable/jetbrains-mono/wght.css';
+import './styles/base.css';
+import './components/settings/settings.css';
 import App from './App.vue';
 
-const app = createApp(App);
-app.use(ElementPlus);
-app.mount('#app');
+createApp(App).mount('#app');
