@@ -42,9 +42,43 @@ function openPaths(paths) {
   }
 }
 
+// ——— Отрисовка ———
+// Chromium кладёт скомпилированные шейдеры в кэш на диске. Если кэш испортится (чаще всего
+// после обновления драйвера), текст рвётся и на экране остаются следы элементов — до тех пор,
+// пока кэш не удалить. Интерфейсу Hzconv кэш на диске не нужен: шейдеры собираются за миг.
+const GPU_CACHE_DIRS = ['GPUCache', 'GPUPersistentCache', 'GrShaderCache', 'ShaderCache', 'DawnGraphiteCache', 'DawnWebGPUCache', 'GraphiteDawnCache'];
+const prefsPath = () => path.join(app.getPath('userData'), 'preferences.json');
+
+function loadPrefs() {
+  try {
+    return { hardwareAcceleration: true, ...fs.readJsonSync(prefsPath()) };
+  } catch {
+    return { hardwareAcceleration: true };
+  }
+}
+
+const prefs = loadPrefs();
+// Выключение ускорения действует только после перезапуска — запоминаем, с чем запущены.
+const hardwareAccelerationActive = prefs.hardwareAcceleration !== false;
+app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
+if (!hardwareAccelerationActive) app.disableHardwareAcceleration();
+
+function purgeGpuCache() {
+  const dir = app.getPath('userData');
+  for (const name of GPU_CACHE_DIRS) {
+    try {
+      fs.removeSync(path.join(dir, name));
+    } catch {
+      /* занято другим процессом — не страшно */
+    }
+  }
+}
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
+  // Только в первом экземпляре: второй не должен трогать кэш работающего окна.
+  purgeGpuCache();
   app.on('second-instance', (_e, argv) => {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
@@ -236,6 +270,20 @@ ipcMain.handle('app:info', () => ({
   ffmpeg: Boolean(ffmpegPath),
   theme: nativeTheme.themeSource
 }));
+
+ipcMain.handle('app:prefs', () => ({ ...prefs, hardwareAccelerationActive }));
+
+ipcMain.handle('app:set-prefs', (_e, patch = {}) => {
+  if (typeof patch.hardwareAcceleration === 'boolean') prefs.hardwareAcceleration = patch.hardwareAcceleration;
+  fs.outputJsonSync(prefsPath(), prefs);
+  return { ...prefs, hardwareAccelerationActive };
+});
+
+ipcMain.handle('app:relaunch', () => {
+  if (engine?.busy) throw new Error('Дождитесь конца конвертации или остановите её');
+  app.relaunch();
+  app.quit();
+});
 
 ipcMain.handle('app:set-theme', (_e, theme) => {
   if (['system', 'light', 'dark'].includes(theme)) nativeTheme.themeSource = theme;
