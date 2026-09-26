@@ -171,7 +171,7 @@ onBeforeUnmount(() => close(false));
   background: var(--panel-3);
 }
 
-.is-open .select__trigger {
+.select.is-open > .select__trigger {
   border-color: var(--accent-line);
 }
 
@@ -184,7 +184,7 @@ onBeforeUnmount(() => close(false));
   transition: transform var(--t) var(--ease);
 }
 
-.is-open .select__chevron {
+.select.is-open > .select__trigger .select__chevron {
   transform: rotate(180deg);
 }
 

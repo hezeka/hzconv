@@ -217,6 +217,9 @@ onBeforeUnmount(() => {
   right: 8px;
   bottom: 8px;
   width: min(var(--inspector-w), calc(100vw - 16px));
+  padding: 8px;
+  border-radius: 16px;
+  background: var(--bg);
   box-shadow: var(--shadow-pop);
   transform: translateX(calc(100% + 16px));
   visibility: hidden;

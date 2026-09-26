@@ -15,7 +15,7 @@ const saved = load();
 
 export const ui = reactive({
   theme: ['system', 'light', 'dark'].includes(saved.theme) ? saved.theme : 'system',
-  tab: saved.tab || 'image',
+  tab: ['image', 'video', 'audio'].includes(saved.tab) ? saved.tab : 'image',
   mode: saved.mode === 'batch' ? 'batch' : 'files',
   compact: false,
   narrow: false,

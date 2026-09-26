@@ -1,38 +1,38 @@
 <template>
-  <div>
-    <UiSection title="Формат">
-      <FormatGrid v-model="s.format" :formats="formats" />
-      <p class="note">{{ formatNote }}</p>
-    </UiSection>
+  <UiSection title="Формат">
+    <FormatGrid v-model="s.format" :formats="formats" />
+    <p class="note">{{ formatNote }}</p>
+  </UiSection>
 
-    <UiSection title="Параметры">
-      <UiField label="Битрейт">
-        <UiSelect v-model="s.bitrate" :options="bitrates" :disabled="!lossy" />
-      </UiField>
-      <UiField label="Частота">
-        <UiSelect v-model="s.sampleRate" :options="rates" />
-      </UiField>
-      <UiField label="Каналы">
-        <UiSegmented v-model="s.channels" :options="channels" />
-      </UiField>
-      <UiSwitch v-model="s.normalize" hint="−16 LUFS, как на стриминговых площадках">Выровнять громкость</UiSwitch>
-    </UiSection>
+  <UiSection title="Параметры">
+    <UiField label="Битрейт">
+      <UiSelect v-model="s.bitrate" :options="bitrates" :disabled="!lossy" />
+    </UiField>
+    <UiField label="Частота">
+      <UiSelect v-model="s.sampleRate" :options="rates" />
+    </UiField>
+    <UiField label="Каналы">
+      <UiSegmented v-model="s.channels" :options="channels" />
+    </UiField>
+    <UiSwitch v-model="s.normalize" hint="−16 LUFS, как на стриминговых площадках">Выровнять громкость</UiSwitch>
+  </UiSection>
 
-    <UiSection title="Фрагмент" collapsible store-key="audio-trim" :open="false" :summary="trimSummary">
-      <div class="time-pair">
-        <UiField label="Начало" stack>
-          <UiInput v-model="s.trimStart" mono placeholder="0:00" />
-        </UiField>
-        <UiField label="Конец" stack>
-          <UiInput v-model="s.trimEnd" mono placeholder="до конца" />
-        </UiField>
-      </div>
-      <p class="note" :class="{ 'note--warn': trimError }">{{ trimError || 'Секунды или мм:сс, например 90 или 1:30.5' }}</p>
-    </UiSection>
+  <OutputSettings />
 
-    <div class="reset reset--pad">
-      <UiButton variant="ghost" size="s" icon="reset" @click="resetSection('audio')">Сбросить настройки аудио</UiButton>
+  <UiSection title="Фрагмент" collapsible store-key="audio-trim" :open="false" :summary="trimSummary">
+    <div class="time-pair">
+      <UiField label="Начало" stack>
+        <UiInput v-model="s.trimStart" mono placeholder="0:00" />
+      </UiField>
+      <UiField label="Конец" stack>
+        <UiInput v-model="s.trimEnd" mono placeholder="до конца" />
+      </UiField>
     </div>
+    <p class="note" :class="{ 'note--warn': trimError }">{{ trimError || 'Секунды или мм:сс, например 90 или 1:30.5' }}</p>
+  </UiSection>
+
+  <div class="islands-reset">
+    <UiButton variant="ghost" size="s" icon="reset" @click="resetSection('audio')">Сбросить настройки аудио</UiButton>
   </div>
 </template>
 
@@ -48,6 +48,7 @@ import UiSegmented from '../ui/UiSegmented.vue';
 import UiSelect from '../ui/UiSelect.vue';
 import UiInput from '../ui/UiInput.vue';
 import UiButton from '../ui/UiButton.vue';
+import OutputSettings from './OutputSettings.vue';
 import FormatGrid from '../ui/FormatGrid.vue';
 
 const s = settings.audio;
@@ -95,10 +96,3 @@ const trimError = computed(() => {
 const trimSummary = computed(() => (s.trimStart || s.trimEnd ? `${s.trimStart || '0:00'} – ${s.trimEnd || 'конец'}` : 'целиком'));
 </script>
 
-<style scoped>
-.reset--pad {
-  padding: 8px 16px 16px;
-  margin: 0;
-  border-top: 1px solid var(--line);
-}
-</style>

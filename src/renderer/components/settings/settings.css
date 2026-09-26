@@ -105,3 +105,10 @@
   grid-template-columns: 1fr 1fr;
   gap: 6px;
 }
+
+/* Сброс — под последним островом, без своей карточки */
+.islands-reset {
+  display: flex;
+  justify-content: center;
+  padding: 2px 0 4px;
+}

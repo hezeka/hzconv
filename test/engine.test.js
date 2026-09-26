@@ -13,6 +13,7 @@ const { BatchController, scan } = require('../src/main/batch');
 const { withExif } = require('./helpers/exif');
 const FileManager = require('../src/main/utils/fileManager');
 const { renderName } = require('../src/main/output');
+const { details } = require('../src/main/inspect');
 const { probeMedia, summarizeProbe, buildArgs } = require('../src/main/pipeline/media');
 const { normalizeSettings } = require('../src/main/formats');
 const { ffmpegPath, parseProbe } = require('../src/main/ffmpeg');
@@ -342,6 +343,61 @@ test('метаданные: EXIF сохраняется при повороте 
   const { results } = await convert([file], { image: { format: 'png', metadata: 'strip', autoOrient: false }, output: { location: 'custom', customDir: path.join(outDir, 'no-orient') } });
   assert.equal(results[0].outputs[0].width, 200);
   assert.equal(results[0].outputs[0].height, 400);
+});
+
+test('HEIC с телефона: поворот по irot и по EXIF, данные съёмки, цвета Display P3, понятная ошибка', async () => {
+  // phone.heic: 96×64, слева красный, справа синий в Display P3; irot 90° против часовой;
+  // EXIF Make=TestCam, Orientation=6 (на пиксели уже не влияет — поворот задаёт irot).
+  const heicDir = path.join(dir, 'heic');
+  await fs.ensureDir(heicDir);
+  const file = path.join(heicDir, 'IMG_0001.HEIC');
+  await fs.copy(path.join(__dirname, 'fixtures', 'phone.heic'), file);
+
+  const info = await details(file);
+  assert.equal(info.format, 'heif');
+  assert.deepEqual([info.width, info.height], [64, 96]);
+  assert.match(info.thumb, /^data:image\/webp;base64,/);
+
+  const outDir = path.join(dir, 'out-heic');
+  const near = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 12);
+  const cases = [
+    ['strip', { format: 'original' }, false],
+    ['keep', { format: 'webp', metadata: 'keep' }, true]
+  ];
+  for (const [label, image, keep] of cases) {
+    const { results } = await convert([file], { image, output: { location: 'custom', customDir: path.join(outDir, label) } });
+    assert.equal(results[0].status, 'done', results[0].error);
+    const out = results[0].outputs[0].path;
+    const m = await sharp(out).metadata();
+    assert.deepEqual([m.width, m.height], [64, 96], label);
+    assert.equal(Boolean(m.exif && m.exif.includes('TestCam')), keep, `${label}: EXIF`);
+    if (keep) assert.ok(!m.orientation || m.orientation === 1, 'ориентация сброшена — кадр уже повёрнут');
+    // Синяя половина наверху, красная внизу; цвета переведены из P3 в sRGB.
+    const top = await pixel(out, 32, 12);
+    const bottom = await pixel(out, 32, 84);
+    assert.ok(near(top.slice(0, 3), [34, 61, 208]), `${label}: верх ${top}`);
+    assert.ok(near(bottom.slice(0, 3), [218, 0, 26]), `${label}: низ ${bottom}`);
+  }
+  const original = await fs.readdir(path.join(outDir, 'strip'));
+  assert.deepEqual(original, ['IMG_0001.jpg'], '«Исходный» для HEIC — JPG');
+
+  // android.heic — тот же кадр без irot: поворот задан только EXIF (Orientation=6, по часовой),
+  // как у некоторых Android-камер. Его нельзя сбрасывать, иначе фото ляжет на бок.
+  const android = path.join(heicDir, 'android.heic');
+  await fs.copy(path.join(__dirname, 'fixtures', 'android.heic'), android);
+  const turned = await convert([android], { image: { format: 'png' }, output: { location: 'custom', customDir: path.join(outDir, 'android') } });
+  assert.equal(turned.results[0].status, 'done', turned.results[0].error);
+  const turnedPath = turned.results[0].outputs[0].path;
+  const tm = await sharp(turnedPath).metadata();
+  assert.deepEqual([tm.width, tm.height], [64, 96]);
+  assert.ok(near((await pixel(turnedPath, 32, 12)).slice(0, 3), [218, 0, 26]), 'красная половина сверху');
+  assert.ok(near((await pixel(turnedPath, 32, 84)).slice(0, 3), [34, 61, 208]), 'синяя половина снизу');
+
+  const broken = path.join(heicDir, 'broken.heic');
+  await fs.writeFile(broken, 'не фото');
+  const { results } = await convert([broken], { image: { format: 'jpg' }, output: { location: 'custom', customDir: outDir } });
+  assert.equal(results[0].status, 'error');
+  assert.match(results[0].error, /HEIF/);
 });
 
 test('пакетное задание: cards_png → ../cards со структурой, исключения, только изменённые', async () => {

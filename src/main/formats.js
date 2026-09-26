@@ -24,11 +24,13 @@ function getOutputFormat(type, id) {
 
 // Для «Исходного» формата подбираем тот же контейнер, что у файла.
 const ORIGINAL_MAP = {
-  image: { jpg: 'jpg', jpeg: 'jpg', jpe: 'jpg', jfif: 'jpg', png: 'png', webp: 'webp', avif: 'avif', tif: 'tiff', tiff: 'tiff', gif: 'gif', svg: 'png' },
+  image: { jpg: 'jpg', jpeg: 'jpg', jpe: 'jpg', jfif: 'jpg', png: 'png', webp: 'webp', avif: 'avif', tif: 'tiff', tiff: 'tiff', gif: 'gif', svg: 'png', heic: 'jpg', heif: 'jpg', hif: 'jpg' },
   video: { mp4: 'mp4', m4v: 'mp4', mov: 'mov', mkv: 'mkv', webm: 'webm', avi: 'avi' },
   audio: { mp3: 'mp3', m4a: 'm4a', aac: 'm4a', ogg: 'ogg', oga: 'ogg', opus: 'opus', flac: 'flac', wav: 'wav', aif: 'wav', aiff: 'wav' }
 };
 const ORIGINAL_FALLBACK = { image: 'png', video: 'mp4', audio: 'mp3' };
+// Эти форматы не записываем — «Исходный» сохраняет их в ближайшем подходящем, с новым расширением.
+const RENAMED = new Set(['aif', 'aiff', 'aac', 'svg', 'heic', 'heif', 'hif']);
 
 /**
  * Возвращает итоговый формат для файла с учётом «Исходного».
@@ -38,7 +40,7 @@ function resolveTarget(filePath, type, formatId) {
   const srcExt = extOf(filePath);
   if (!formatId || formatId === 'original') {
     const id = ORIGINAL_MAP[type]?.[srcExt] || ORIGINAL_FALLBACK[type];
-    const keepExt = ORIGINAL_MAP[type]?.[srcExt] && srcExt !== 'aif' && srcExt !== 'aiff' && srcExt !== 'aac' && srcExt !== 'svg';
+    const keepExt = ORIGINAL_MAP[type]?.[srcExt] && !RENAMED.has(srcExt);
     return { id, ext: keepExt ? srcExt : getOutputFormat(type, id).ext };
   }
   const fmt = getOutputFormat(type, formatId);
