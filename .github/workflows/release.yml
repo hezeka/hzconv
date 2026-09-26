@@ -43,9 +43,9 @@ jobs:
             args: --linux --x64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -69,14 +69,25 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # На PR подписываем так же, как в релизе, иначе проверка не ловит ошибки подписи.
+          # Секреты в PR из форков GitHub не передаёт, так что это безопасно.
+          CSC_FOR_PULL_REQUEST: true
         run: |
-          EXTRA=""
-          if [ -z "$CSC_LINK" ]; then
+          # Отсутствующий секрет приходит пустой строкой, а electron-builder считает
+          # пустой CSC_LINK путём к сертификату — убираем пустые переменные совсем.
+          for v in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!v}" ]; then unset "$v"; fi
+          done
+
+          if [ -z "${CSC_LINK:-}" ]; then
             export CSC_IDENTITY_AUTO_DISCOVERY=false
-            # На Apple Silicon приложение без подписи не запустится совсем — нужна хотя бы ad-hoc.
-            if [ "$RUNNER_OS" = "macOS" ]; then EXTRA="--config.mac.identity=-"; fi
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              # Без подписи на Apple Silicon приложение не запустится — нужна хотя бы ad-hoc.
+              # Hardened runtime без настоящего сертификата мешает загрузке нативных библиотек.
+              node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));Object.assign(p.build.mac,{identity:'-',hardenedRuntime:false});fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
+            fi
           fi
-          npx electron-builder ${{ matrix.args }} --publish never $EXTRA
+          npx electron-builder ${{ matrix.args }} --publish never
 
       - uses: actions/upload-artifact@v4
         with:
@@ -93,7 +104,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Версия в теге совпадает с package.json
         run: |
