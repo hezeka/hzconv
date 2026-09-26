@@ -1,525 +1,288 @@
 <template>
-  <div class="container">
-    <el-card class="app-container">
-      <div class="header">
-        Hzconv
-        <div style="-webkit-app-region: no-drag;" class="el-button" @click="close()">
-          Закрыть
+  <div class="app" :class="[`os-${platform}`, { 'is-compact': ui.compact, 'is-narrow': ui.narrow }]">
+    <TitleBar />
+    <main class="workspace">
+      <div class="workspace__main">
+        <QueuePanel v-if="ui.mode === 'files'" class="workspace__panel" />
+        <BatchPanel v-else class="workspace__panel" />
+        <CompactBar v-if="ui.compact" />
+      </div>
+      <Transition name="fade">
+        <div v-if="ui.compact && ui.settingsOpen" class="drawer-scrim" @click="ui.settingsOpen = false" />
+      </Transition>
+      <Inspector class="workspace__inspector" :class="{ 'is-drawer': ui.compact, 'is-open': ui.settingsOpen }" />
+    </main>
+
+    <Transition name="fade">
+      <div v-if="ui.dragging" class="drop-overlay">
+        <div class="drop-overlay__frame">
+          <Icon name="plus" :size="22" />
+          <span>Отпустите, чтобы добавить</span>
+          <small>Файлы и папки целиком</small>
         </div>
       </div>
-      <!-- <template #header>
-        <div class="header">
-          <h2>Конвертер медиафайлов</h2>
-        </div>
-      </template> -->
-      
-      <el-tabs v-model="activeTab">
-        <el-tab-pane label="Отдельные файлы" name="files">
-          <FileDropZone 
-            :supportedFormats="supportedFormats" 
-            @files-selected="handleFilesSelected"
-          />
-          
-          <ConversionForm
-            :files="selectedFiles"
-            :supportedFormats="supportedFormats"
-            :isConverting="isConverting"
-            @start-conversion="startConversion"
-            @remove-file="removeFile"
-            @clear-files="clearFiles"
-          />
-        </el-tab-pane>
-        
-        <el-tab-pane label="Конвертация директории" name="directory">
-          <DirectoryConversion
-            :supportedFormats="supportedFormats"
-            :isConverting="isDirectoryConverting"
-            @conversion-start="startDirectoryConversion"
-            @conversion-complete="completeDirectoryConversion"
-            @conversion-cancel="cancelDirectoryConversion"
-          />
-        </el-tab-pane>
-      </el-tabs>
-      
-      <!-- Прогресс конвертации файлов -->
-      <div v-if="isConverting" class="progress-section">
-        <h3>Прогресс конвертации</h3>
+    </Transition>
 
-        <div v-for="(item, index) in conversionProgress" :key="index" class="file-progress">
-          <div class="file-name">{{ getFileName(item.filePath) }}</div>
-          <el-progress
-            :percentage="Math.round(item.progress * 100)"
-            :status="item.status === 'active' ? '' : item.status"
-            :duration="0"
-          />
-        </div>
-
-        <div class="total-progress">
-          <div>Общий прогресс</div>
-          <el-progress
-            :percentage="Math.round(getTotalProgress() * 100)"
-            :status="conversionStatus === 'active' ? '' : conversionStatus"
-            :duration="0"
-          />
-        </div>
-
-        <div class="progress-actions">
-          <el-button type="danger" @click="cancelConversion">
-            Отменить конвертацию
-          </el-button>
-        </div>
-      </div>
-      
-      <!-- Результаты конвертации -->
-      <div v-if="conversionResults.length > 0" class="results-section">
-        <h3>Результаты</h3>
-        
-        <el-alert
-          v-if="successCount > 0"
-          type="success"
-          :title="`Успешно конвертировано: ${successCount} файл(ов)`"
-          show-icon
-        />
-        
-        <el-alert
-          v-if="errorCount > 0"
-          type="error"
-          :title="`Ошибок конвертации: ${errorCount} файл(ов)`"
-          show-icon
-        />
-        
-        <el-button 
-          v-if="successCount > 0" 
-          type="primary" 
-          @click="clearResults" 
-          size="small"
-          style="margin-top: 10px;"
-        >
-          Очистить результаты
-        </el-button>
-      </div>
-    </el-card>
+    <CropEditor />
+    <PreviewModal />
+    <FolderImport />
+    <ShortcutsDialog />
+    <Toasts />
   </div>
 </template>
 
-<style>
-.header {
-  -webkit-app-region: drag;
-  margin: calc(var(--el-card-padding) * -1);
-  padding: var(--el-card-padding);
-  margin-bottom: 0;
-  font-weight: 600;
-  position: sticky;
-  top: 0;
-  background: #ffffff9e;
-  backdrop-filter: blur(8px);
-  z-index: 1000;
-  border-bottom: 1px solid #f0f0f0;
+<script setup>
+import { onBeforeUnmount, onMounted } from 'vue';
+import { api, platform } from './api';
+import { ui, applyTheme } from './store/ui';
+import { queue, addPaths, removeItem, startConversion, cancelConversion, selectedItem, visibleItems } from './store/queue';
+import { batch, createJob, runJob } from './store/batch';
+import { toast } from './store/toast';
+import { useAddActions } from './composables/useAddActions';
+import Icon from './components/ui/Icon.vue';
+import TitleBar from './components/TitleBar.vue';
+import QueuePanel from './components/QueuePanel.vue';
+import BatchPanel from './components/BatchPanel.vue';
+import CompactBar from './components/CompactBar.vue';
+import Inspector from './components/Inspector.vue';
+import CropEditor from './components/CropEditor.vue';
+import PreviewModal from './components/PreviewModal.vue';
+import FolderImport from './components/FolderImport.vue';
+import ShortcutsDialog from './components/ShortcutsDialog.vue';
+import Toasts from './components/Toasts.vue';
+
+const { addFiles, addFolder, pasteFromClipboard } = useAddActions();
+
+// ——— Drag & drop на всё окно ———
+let dragDepth = 0;
+const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
+
+function onDragEnter(e) {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth++;
+  ui.dragging = true;
 }
-
-body {
-  margin: 0;
+function onDragOver(e) {
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = hasFiles(e) ? 'copy' : 'none';
 }
-.container {
-  width: 100% !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  max-width: unset !important;
+function onDragLeave() {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) ui.dragging = false;
 }
-
-.el-card {
-  /* border-radius: 0; */
-  /* box-shadow: 0; */
-  height: 100vh;
-  box-sizing: border-box;
-  overflow: auto;
-}
-/* @media screen and (max-width: 1000px) {
-  body {
-    margin: 0;
-  }
-  .container {
-    width: 100% !important;
-    margin: 0 !important;
-    padding: 0 !important;
-  }
-
-  .el-card {
-    border-radius: 0;
-    box-shadow: 0;
-    height: 100vh;
-    box-sizing: border-box;
-    overflow: auto;
-  }
-} */
-
-*::-webkit-scrollbar,
-html *::-webkit-scrollbar {
-  height: 4px;
-  width: 4px;
-}
-*::-webkit-scrollbar-track,
-html *::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, .1);
-}
-*::-webkit-scrollbar-thumb,
-html *::-webkit-scrollbar-thumb {
-  background-color: #6d6d6d80;
-  border-radius: 5px;
-  border: 3px solid rgba(0, 0, 0, 0);
-}
-  </style>
-
-<script>
-import { ref, onMounted, computed, onUnmounted } from 'vue';
-import FileDropZone from './components/FileDropZone.vue';
-import ConversionForm from './components/ConversionForm.vue';
-import DirectoryConversion from './components/DirectoryConversion.vue';
-import { ElMessage } from 'element-plus';
-
-export default {
-  components: {
-    FileDropZone,
-    ConversionForm,
-    DirectoryConversion
-  },
-  
-  setup() {
-    const activeTab = ref('files');
-    const supportedFormats = ref({
-      image: [],
-      video: [],
-      audio: []
-    });
-    
-    // Состояние конвертации файлов
-    const selectedFiles = ref([]);
-    const isConverting = ref(false);
-    const conversionProgress = ref([]);
-    const conversionResults = ref([]);
-    const conversionStatus = ref('');
-    
-    // Состояние конвертации директории
-    const isDirectoryConverting = ref(false);
-    
-    // Расчет статистики
-const successCount = computed(() => {
-  return conversionResults.value.reduce((total, result) => {
-    // Если это результат директории, суммируем successCount
-    if (result.isDirectory) {
-      return total + (result.successCount || 0);
-    }
-    // Если это обычный файл и он успешен
-    if (result.success) {
-      return total + 1;
-    }
-    return total;
-  }, 0);
-});
-
-const errorCount = computed(() => {
-  return conversionResults.value.reduce((total, result) => {
-    // Если это результат директории, суммируем errorCount
-    if (result.isDirectory) {
-      return total + (result.errorCount || 0);
-    }
-    // Если это обычный файл и он неуспешен (и не отменен)
-    if (!result.success && !result.cancelled) {
-      return total + 1;
-    }
-    return total;
-  }, 0);
-});
-
-// Загрузка поддерживаемых форматов
-const loadSupportedFormats = async () => {
-  try {
-    const formats = await window.electronAPI.getSupportedFormats();
-    supportedFormats.value = formats;
-  } catch (error) {
-    console.error('Ошибка при получении поддерживаемых форматов:', error);
-    ElMessage.error('Не удалось загрузить поддерживаемые форматы файлов');
-  }
-};
-
-// Работа с отдельными файлами
-const handleFilesSelected = (files) => {
-  selectedFiles.value = [...selectedFiles.value, ...files];
-};
-
-const removeFile = (index) => {
-  selectedFiles.value.splice(index, 1);
-};
-
-const clearFiles = () => {
-  selectedFiles.value = [];
-};
-
-// Расчет общего прогресса
-const getTotalProgress = () => {
-  if (conversionProgress.value.length === 0) return 0;
-  
-  const totalProgress = conversionProgress.value
-    .reduce((sum, item) => sum + item.progress, 0);
-    
-  return totalProgress / conversionProgress.value.length;
-};
-
-// Вспомогательные функции
-const getFileName = (filePath) => {
-  return filePath ? filePath.split(/[\/\\]/).pop() : '';
-};
-
-// Старт конвертации отдельных файлов
-const startConversion = async (options) => {
-  if (selectedFiles.value.length === 0) {
-    ElMessage.warning('Выберите файлы для конвертации');
+async function onDrop(e) {
+  e.preventDefault();
+  dragDepth = 0;
+  ui.dragging = false;
+  const paths = [...(e.dataTransfer?.files || [])].map((f) => api.pathForFile(f)).filter(Boolean);
+  if (!paths.length || queue.running || batch.running) return;
+  // В пакетном режиме одна папка становится папкой задания.
+  if (ui.mode === 'batch' && paths.length === 1 && (await api.pathKind(paths[0])) === 'dir') {
+    const job = await createJob(paths[0]);
+    if (job) toast(`Задание «${job.name}»`, { kind: 'ok' });
     return;
   }
-
-  try {
-    // ВАЖНО: Сначала очищаем предыдущие результаты и прогресс
-    conversionResults.value = [];
-    conversionProgress.value = [];
-
-    // Ждем следующий тик, чтобы DOM обновился
-    await new Promise(resolve => setTimeout(resolve, 0));
-
-    // Инициализируем прогресс для каждого файла
-    conversionProgress.value = selectedFiles.value.map(file => ({
-      filePath: file,
-      progress: 0,
-      status: 'active'
-    }));
-
-    // Устанавливаем статус конвертации
-    isConverting.value = true;
-    conversionStatus.value = 'active';
-
-    // Настраиваем обработчики событий
-    window.electronAPI.onConversionProgress((data) => {
-      const index = conversionProgress.value.findIndex(
-        item => item.filePath === data.filePath
-      );
-
-      if (index !== -1) {
-        conversionProgress.value[index].progress = data.progress;
-      }
-    });
-
-    window.electronAPI.onConversionError((data) => {
-      const index = conversionProgress.value.findIndex(
-        item => item.filePath === data.filePath
-      );
-
-      if (index !== -1) {
-        conversionProgress.value[index].status = 'exception';
-      }
-    });
-
-    // Запускаем конвертацию
-    const results = await window.electronAPI.convertFiles({
-      files: selectedFiles.value.map(f => String(f)), // Преобразуем в простые строки
-      options
-    });
-
-    // Очищаем старые результаты перед добавлением новых
-    const newResults = [];
-
-    // Обрабатываем результаты
-    results.forEach(result => {
-      // Обновляем статус в прогрессе
-      const index = conversionProgress.value.findIndex(
-        item => item.filePath === result.inputPath || item.filePath === result.filePath
-      );
-
-      if (index !== -1) {
-        conversionProgress.value[index].status = result.success ? 'success' : 'exception';
-        conversionProgress.value[index].progress = 1; // 100%
-      }
-
-      // Добавляем в результаты
-      newResults.push({
-        filePath: result.inputPath || result.filePath,
-        outputPath: result.outputPath,
-        success: result.success && !result.cancelled,
-        error: result.error,
-        cancelled: result.cancelled
-      });
-    });
-
-    // Заменяем результаты
-    conversionResults.value = newResults;
-
-    // Обновляем общий статус
-    conversionStatus.value = 'success';
-
-    // Подсчитываем успешные и неуспешные конвертации
-    const successfulCount = newResults.filter(r => r.success).length;
-    const failedCount = newResults.filter(r => !r.success && !r.cancelled).length;
-    const cancelledCount = newResults.filter(r => r.cancelled).length;
-
-    // Выводим сообщение
-    if (successfulCount > 0) {
-      ElMessage.success(`Успешно конвертировано: ${successfulCount} файл(ов)`);
-    }
-
-    if (failedCount > 0) {
-      ElMessage.error(`Ошибки при конвертации: ${failedCount} файл(ов)`);
-    }
-
-    if (cancelledCount > 0) {
-      ElMessage.warning(`Отменено: ${cancelledCount} файл(ов)`);
-    }
-  } catch (error) {
-    console.error('Ошибка при конвертации файлов:', error);
-    ElMessage.error('Произошла ошибка при конвертации файлов');
-    conversionStatus.value = 'exception';
-  } finally {
-    isConverting.value = false;
-    // Удаляем слушатели событий
-    window.electronAPI.removeAllListeners();
-  }
-};
-
-// Отмена конвертации
-const cancelConversion = async () => {
-  try {
-    await window.electronAPI.cancelConversion();
-    ElMessage.warning('Запрос на отмену конвертации отправлен');
-  } catch (error) {
-    console.error('Ошибка при отмене конвертации:', error);
-    ElMessage.error('Не удалось отменить конвертацию');
-  }
-};
-
-// Очистка результатов
-const clearResults = () => {
-  conversionResults.value = [];
-  conversionProgress.value = [];
-};
-
-// Работа с конвертацией директории
-const startDirectoryConversion = () => {
-  // Очищаем предыдущие результаты
-  conversionResults.value = [];
-  conversionProgress.value = [];
-
-  isDirectoryConverting.value = true;
-  // Активируем вкладку директории
-  activeTab.value = 'directory';
-};
-
-const completeDirectoryConversion = (result) => {
-  isDirectoryConverting.value = false;
-  
-  // Обновляем результаты
-  if (result && (result.successCount > 0 || result.errorCount > 0)) {
-    conversionResults.value.push({
-      isDirectory: true,
-      success: result.success,
-      successCount: result.successCount || 0,
-      errorCount: result.errorCount || 0,
-      message: result.message || ''
-    });
-  }
-};
-
-const cancelDirectoryConversion = () => {
-  isDirectoryConverting.value = false;
-};
-
-// Инициализация при монтировании
-onMounted(async () => {
-  await loadSupportedFormats();
-});
-
-// Убираем слушатели при размонтировании
-onUnmounted(() => {
-  window.electronAPI.removeAllListeners();
-});
-
-const close = () => {
-  console.log('Closing')
-  window.electronAPI.window('close');
+  if (ui.mode === 'batch') ui.mode = 'files';
+  await addPaths(paths, { recursive: true });
 }
 
-return {
-  activeTab,
-  supportedFormats,
-  selectedFiles,
-  isConverting,
-  isDirectoryConverting,
-  conversionProgress,
-  conversionResults,
-  conversionStatus,
-  handleFilesSelected,
-  removeFile,
-  clearFiles,
-  startConversion,
-  cancelConversion,
-  getTotalProgress,
-  getFileName,
-  successCount,
-  errorCount,
-  clearResults,
-  startDirectoryConversion,
-  completeDirectoryConversion,
-  cancelDirectoryConversion,
-  close
-};
+// ——— Горячие клавиши ———
+const modalOpen = () => ui.cropId || ui.previewId || ui.folderImport || ui.presetDialog || ui.shortcuts;
+const busy = () => queue.running || batch.running;
+const isTyping = (e) => ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target?.tagName) || e.target?.isContentEditable;
+
+function onKey(e) {
+  const mod = e.ctrlKey || e.metaKey;
+  const key = e.key.toLowerCase();
+  if (mod && key === 'o') {
+    e.preventDefault();
+    if (busy()) return;
+    ui.mode = 'files';
+    e.shiftKey ? addFolder() : addFiles();
+    return;
+  }
+  if (mod && key === 'enter') {
+    e.preventDefault();
+    if (busy() || modalOpen()) return;
+    if (ui.mode === 'batch') runJob();
+    else startConversion();
+    return;
+  }
+  if (key === 'escape' && ui.settingsOpen) {
+    ui.settingsOpen = false;
+    return;
+  }
+  if (modalOpen() || isTyping(e)) return;
+  if (key === 'escape' && busy()) {
+    if (batch.running) api.cancel();
+    else cancelConversion();
+    return;
+  }
+  if (ui.mode === 'batch') return;
+  if (mod && key === 'v') {
+    e.preventDefault();
+    pasteFromClipboard();
+  } else if ((key === 'delete' || key === 'backspace') && selectedItem.value && !queue.running) {
+    removeItem(selectedItem.value.id);
+  } else if (key === 'arrowdown' || key === 'arrowup') {
+    const list = visibleItems.value;
+    if (!list.length) return;
+    e.preventDefault();
+    const i = list.findIndex((it) => it.id === queue.selectedId);
+    const next = key === 'arrowdown' ? Math.min(list.length - 1, i + 1) : Math.max(0, i - 1);
+    queue.selectedId = list[next].id;
+    window.dispatchEvent(new CustomEvent('queue:reveal', { detail: next }));
+  } else if (key === ' ' && selectedItem.value?.type === 'image') {
+    e.preventDefault();
+    ui.previewId = selectedItem.value.id;
+  } else if (key === 'c' && selectedItem.value && selectedItem.value.type !== 'audio') {
+    ui.cropId = selectedItem.value.id;
+  } else if (key === '?' || (e.shiftKey && key === '/')) {
+    ui.shortcuts = true;
+  }
 }
-};
+
+let offOpen = null;
+
+onMounted(() => {
+  applyTheme();
+  window.addEventListener('dragenter', onDragEnter);
+  window.addEventListener('dragover', onDragOver);
+  window.addEventListener('dragleave', onDragLeave);
+  window.addEventListener('drop', onDrop);
+  window.addEventListener('keydown', onKey);
+  api.onEngineCrash(() => toast('Процесс обработки перезапущен после сбоя. Подробности — в журнале ошибок', { kind: 'error', timeout: 8000 }));
+  offOpen = api.onOpenPaths((paths) => {
+    if (busy()) return;
+    ui.mode = 'files';
+    addPaths(paths, { recursive: true });
+  });
+  api
+    .info()
+    .then((info) => {
+      if (!info.ffmpeg) toast('FFmpeg не найден — видео и аудио недоступны', { kind: 'error', timeout: 8000 });
+    })
+    .catch(() => {});
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('dragenter', onDragEnter);
+  window.removeEventListener('dragover', onDragOver);
+  window.removeEventListener('dragleave', onDragLeave);
+  window.removeEventListener('drop', onDrop);
+  window.removeEventListener('keydown', onKey);
+  offOpen?.();
+});
 </script>
 
 <style>
-.container {
-  max-width: 1000px;
-  margin: 0 auto;
-  padding: 20px;
-  font-family: Arial, sans-serif;
-}
-
-.app-container {
-  margin: 0 auto;
-}
-
-.header {
+.app {
+  height: 100%;
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
+}
+
+.workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 8px;
+  padding: 0 8px 8px;
+}
+
+.workspace__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workspace__panel {
+  flex: 1;
+  min-height: 0;
+}
+
+.workspace__inspector {
+  width: var(--inspector-w);
+  flex: none;
+}
+
+/* Компактное окно: настройки выезжают поверх, как панель */
+.workspace__inspector.is-drawer {
+  position: fixed;
+  z-index: 1500;
+  top: var(--titlebar-h);
+  right: 8px;
+  bottom: 8px;
+  width: min(var(--inspector-w), calc(100vw - 16px));
+  box-shadow: var(--shadow-pop);
+  transform: translateX(calc(100% + 16px));
+  visibility: hidden;
+  transition: transform 240ms var(--ease), visibility 0s linear 240ms;
+}
+
+.workspace__inspector.is-drawer.is-open {
+  transform: none;
+  visibility: visible;
+  transition: transform 240ms var(--ease);
+}
+
+/* В компактном окне уведомления — по центру, над нижней панелью */
+.is-compact .toasts {
+  left: 50%;
+  bottom: 84px;
+  width: calc(100vw - 32px);
+}
+
+.drawer-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  background: var(--scrim);
+}
+
+.is-narrow .workspace {
+  padding: 0 6px 6px;
+}
+
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  padding: 10px;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  pointer-events: none;
+}
+
+.drop-overlay__frame {
+  height: 100%;
+  border-radius: 14px;
+  border: 1.5px solid var(--accent);
+  background: var(--accent-soft);
+  display: flex;
+  flex-direction: column;
   align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--accent);
+  font-size: 15px;
+  font-weight: 560;
 }
 
-.progress-section {
-  margin-top: 20px;
-  padding-top: 10px;
-  border-top: 1px solid #e6e6e6;
+.drop-overlay__frame small {
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--text-2);
 }
 
-.file-progress {
-  margin-bottom: 10px;
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 140ms var(--ease);
 }
-
-.file-name {
-  margin-bottom: 5px;
-  font-size: 14px;
-  color: #606266;
-}
-
-.total-progress {
-  margin-top: 15px;
-  padding-top: 10px;
-  border-top: 1px dashed #e6e6e6;
-}
-
-.results-section {
-  margin-top: 20px;
-  padding-top: 10px;
-  border-top: 1px solid #e6e6e6;
-}
-
-.progress-actions {
-  margin-top: 20px;
-  text-align: center;
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 </style>

@@ -1,0 +1,115 @@
+# Сборка установщиков для Windows, macOS и Linux.
+#
+# • Push тега vX.Y.Z — собирает все установщики и создаёт черновик релиза
+#   на странице Releases. Останется проверить его и нажать «Publish».
+# • Pull request в master — только сборка и тесты (установщики доступны
+#   в артефактах запуска), релиз не создаётся.
+# • Ручной запуск (Actions → Release → Run workflow) — то же, что для PR.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            args: --win --x64
+          - name: macOS Apple Silicon
+            os: macos-latest
+            args: --mac --arm64
+          - name: macOS Intel
+            os: macos-15-intel
+            args: --mac --x64
+          - name: Linux x64
+            os: ubuntu-latest
+            args: --linux --x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Установка зависимостей
+        run: npm ci
+
+      - name: Тесты движка
+        run: npm test
+
+      - name: Сборка интерфейса
+        run: npm run vite:build
+
+      - name: Сборка установщика
+        shell: bash
+        env:
+          # Подпись и нотаризация необязательны: без секретов macOS-сборка
+          # подписывается ad-hoc, Windows-сборка остаётся без подписи.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          EXTRA=""
+          if [ -z "$CSC_LINK" ]; then
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+            # На Apple Silicon приложение без подписи не запустится совсем — нужна хотя бы ad-hoc.
+            if [ "$RUNNER_OS" = "macOS" ]; then EXTRA="--config.mac.identity=-"; fi
+          fi
+          npx electron-builder ${{ matrix.args }} --publish never $EXTRA
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hzconv-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            build/*.exe
+            build/*.dmg
+            build/*.AppImage
+
+  release:
+    name: Черновик релиза
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Версия в теге совпадает с package.json
+        run: |
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "v$PKG" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Тег $GITHUB_REF_NAME не совпадает с версией в package.json ($PKG)"
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: artifacts/*

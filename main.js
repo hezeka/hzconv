@@ -1,598 +1,361 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, clipboard, screen } = require('electron');
 const path = require('path');
 const fs = require('fs-extra');
-const { getFileType, getConverter, allSupportedFormats } = require('./src/main/converters');
+const os = require('os');
+const { formats, defaults } = require('./src/main/formats');
 const FileManager = require('./src/main/utils/fileManager');
 const logger = require('./src/main/utils/logger');
+const { ffmpegPath } = require('./src/main/ffmpeg');
+const { EngineHost } = require('./src/main/engine/host');
 
-// В main.js в начале файла:
-const conversionController = require('./src/main/conversionController');
+const isDev = process.env.NODE_ENV === 'development';
+const isMac = process.platform === 'darwin';
+const isWin = process.platform === 'win32';
 
-// Затем добавим IPC обработчики для отмены конвертации
+const THEME = {
+  dark: { bg: '#101012', symbols: '#a3a3ab' },
+  light: { bg: '#f4f4f1', symbols: '#56565e' }
+};
 
-// Получение статуса конвертации
-ipcMain.handle('get-conversion-status', () => {
-  return conversionController.getStatus();
-});
+let mainWindow = null;
+let pendingPaths = [];
+// sharp и ffmpeg работают в отдельном процессе: падение кодека не закрывает окно.
+let engine = null;
 
-// Отмена текущей конвертации
-ipcMain.handle('cancel-conversion', () => {
-  return conversionController.cancelConversion();
-});
+// ——— Один экземпляр: повторный запуск передаёт файлы в уже открытое окно ———
 
-// Модифицируем функцию convertSingleFile
-async function convertSingleFile(filePath, options, baseDirPath = null) {
-  let converter = null;
+function pathsFromArgv(argv) {
+  const appPath = path.resolve(app.getAppPath());
+  return argv
+    .slice(1)
+    .filter((a) => a && !a.startsWith('-'))
+    .map((a) => path.resolve(a))
+    .filter((a) => a !== appPath && fs.existsSync(a));
+}
 
-  try {
-    if (conversionController.isConversionCancelled()) {
-      return {
-        success: false,
-        cancelled: true,
-        filePath
-      };
-    }
-
-    const fileType = getFileType(filePath);
-
-    if (!fileType) {
-      logger.error(`Неподдерживаемый тип файла: ${path.basename(filePath)}`);
-      return {
-        success: false,
-        error: `Неподдерживаемый тип файла: ${path.basename(filePath)}`,
-        filePath
-      };
-    }
-
-    converter = getConverter(fileType);
-
-    // Используем baseDirPath при генерации пути для сохранения структуры папок
-    const outputPath = FileManager.generateOutputPath(filePath, null, {
-      ...options
-    }, baseDirPath);
-
-    if (!outputPath) {
-      // Файл уже был пропущен в FileManager с логированием
-      return {
-        success: false,
-        skipped: true,
-        filePath
-      };
-    }
-
-    // Добавляем обработчики событий
-    converter.removeAllListeners();
-
-    converter.on('progress', (progress) => {
-      conversionController.updateFileProgress(filePath, progress);
-
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('conversion-progress', {
-          filePath,
-          progress
-        });
-      }
-    });
-
-    converter.on('error', (error) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('conversion-error', {
-          filePath,
-          error: error.message || 'Неизвестная ошибка'
-        });
-      }
-    });
-
-    // Настраиваем проверку отмены
-    const cancelCheckInterval = setInterval(() => {
-      if (conversionController.isConversionCancelled()) {
-        clearInterval(cancelCheckInterval);
-        if (converter && typeof converter.cancel === 'function') {
-          converter.cancel();
-        }
-      }
-    }, 100); // Проверяем каждые 100ms
-
-    try {
-      // Запускаем конвертацию
-      const result = await converter.convert(filePath, outputPath, options);
-
-      clearInterval(cancelCheckInterval);
-
-      // Если конвертация была отменена во время выполнения
-      if (conversionController.isConversionCancelled()) {
-        return {
-          success: false,
-          cancelled: true,
-          filePath
-        };
-      }
-
-      // Логируем успешную конвертацию
-      logger.fileConverted(filePath, outputPath);
-
-      // Сообщаем о завершении файла
-      conversionController.fileCompleted(filePath, { success: true });
-
-      return {
-        success: true,
-        inputPath: filePath,
-        outputPath: outputPath
-      };
-    } catch (error) {
-      clearInterval(cancelCheckInterval);
-
-      // Если ошибка из-за отмены, не считаем это ошибкой
-      if (conversionController.isConversionCancelled()) {
-        return {
-          success: false,
-          cancelled: true,
-          filePath
-        };
-      }
-
-      throw error;
-    }
-  } catch (error) {
-    logger.fileError(filePath, error.message);
-    return {
-      success: false,
-      error: error.message || 'Неизвестная ошибка',
-      filePath
-    };
+function openPaths(paths) {
+  if (!paths.length) return;
+  if (mainWindow && !mainWindow.webContents.isLoading()) {
+    mainWindow.webContents.send('app:open-paths', paths);
+  } else {
+    pendingPaths.push(...paths);
   }
 }
 
-// Извлекаем логику конвертации в отдельную функцию, чтобы её можно было использовать из разных обработчиков
-async function convertSingleFileOLD2(filePath, options) {
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', (_e, argv) => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+    openPaths(pathsFromArgv(argv));
+  });
+  pendingPaths = pathsFromArgv(process.argv);
+}
+
+app.on('open-file', (e, filePath) => {
+  e.preventDefault();
+  openPaths([filePath]);
+});
+
+// ——— Состояние окна ———
+
+const statePath = () => path.join(app.getPath('userData'), 'window-state.json');
+
+function loadWindowState() {
+  const fallback = { width: 1180, height: 780 };
   try {
-    console.log('Конвертация файла:', filePath);
-    console.log('Опции конвертации:', options);
-    
-    const fileType = getFileType(filePath);
-    
-    if (!fileType) {
-      console.error(`Неподдерживаемый тип файла: ${filePath}`);
-      return { 
-        success: false, 
-        error: `Неподдерживаемый тип файла: ${path.basename(filePath)}`,
-        filePath 
-      };
-    }
-    
-    const converter = getConverter(fileType);
-    const outputPath = FileManager.generateOutputPath(filePath, options);
-    
-    if (!outputPath) {
-      console.log(`Файл пропущен: ${filePath}`);
-      return { 
-        success: false, 
-        skipped: true, 
-        filePath 
-      };
-    }
-    
-    // Добавляем обработчики событий, чтобы отправлять прогресс в UI
-    converter.removeAllListeners();
-    
-    converter.on('progress', (progress) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('conversion-progress', { 
-          filePath, 
-          progress 
-        });
-      }
-    });
-    
-    converter.on('error', (error) => {
-      console.error('Ошибка в процессе конвертации:', error);
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('conversion-error', { 
-          filePath, 
-          error: error.message || 'Неизвестная ошибка' 
-        });
-      }
-    });
-    
-    // Запускаем конвертацию
-    console.log(`Начинаем конвертацию из ${filePath} в ${outputPath}`);
-    const result = await converter.convert(filePath, outputPath, options);
-    console.log('Результат конвертации:', result);
-    
-    // Возвращаем только сериализуемые поля
-    return {
-      success: true,
-      inputPath: filePath,
-      outputPath: outputPath
-    };
-  } catch (error) {
-    console.error('Ошибка конвертации:', error);
-    return { 
-      success: false, 
-      error: error.message || 'Неизвестная ошибка',
-      filePath 
-    };
+    const s = fs.readJsonSync(statePath());
+    const visible = screen.getAllDisplays().some(({ workArea: a }) => s.x >= a.x - 50 && s.y >= a.y - 50 && s.x < a.x + a.width - 100 && s.y < a.y + a.height - 100);
+    return visible ? s : { ...fallback, maximized: s.maximized };
+  } catch {
+    return fallback;
   }
 }
 
+function saveWindowState() {
+  if (!mainWindow) return;
+  try {
+    const b = mainWindow.getNormalBounds();
+    fs.outputJsonSync(statePath(), { ...b, maximized: mainWindow.isMaximized() });
+  } catch {
+    /* не критично */
+  }
+}
 
-async function createWindow() {
+function overlayColors() {
+  const t = nativeTheme.shouldUseDarkColors ? THEME.dark : THEME.light;
+  return { color: t.bg, symbolColor: t.symbols, height: 44 };
+}
+
+function createWindow() {
+  const state = loadWindowState();
+  const t = nativeTheme.shouldUseDarkColors ? THEME.dark : THEME.light;
+
   mainWindow = new BrowserWindow({
-    width: 900,
-    height: 700,
+    x: state.x,
+    y: state.y,
+    width: state.width,
+    height: state.height,
+    minWidth: 420,
+    minHeight: 480,
+    show: false,
+    backgroundColor: t.bg,
+    // Windows: нативные кнопки поверх нашей шапки (со Snap Layouts), macOS: «светофор».
+    titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
+    titleBarOverlay: isWin ? overlayColors() : false,
+    trafficLightPosition: { x: 16, y: 15 },
+    frame: isMac || isWin,
+    icon: path.join(__dirname, 'src/icon.png'),
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      // Добавляем политику безопасности контента
-      webSecurity: true
+      sandbox: true,
+      spellcheck: false
     }
   });
 
-  // Устанавливаем CSP заголовок
-  mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        'Content-Security-Policy': ["default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';"]
+  if (isDev) mainWindow.loadURL('http://localhost:8085');
+  else mainWindow.loadFile(path.join(__dirname, 'dist/index.html'));
+
+  mainWindow.once('ready-to-show', () => {
+    if (state.maximized) mainWindow.maximize();
+    mainWindow.show();
+  });
+
+  // Файл, брошенный мимо зоны, не должен открываться вместо приложения.
+  mainWindow.webContents.on('will-navigate', (e) => e.preventDefault());
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (pendingPaths.length) {
+      mainWindow.webContents.send('app:open-paths', pendingPaths);
+      pendingPaths = [];
+    }
+  });
+
+  const sendState = () => send('window:state', { maximized: mainWindow.isMaximized(), fullscreen: mainWindow.isFullScreen() });
+  mainWindow.on('maximize', sendState);
+  mainWindow.on('unmaximize', sendState);
+  mainWindow.on('enter-full-screen', sendState);
+  mainWindow.on('leave-full-screen', sendState);
+
+  mainWindow.on('close', (e) => {
+    if (engine?.busy) {
+      const choice = dialog.showMessageBoxSync(mainWindow, {
+        type: 'question',
+        buttons: ['Продолжить конвертацию', 'Прервать и закрыть'],
+        defaultId: 0,
+        cancelId: 0,
+        message: 'Конвертация ещё идёт',
+        detail: 'Если закрыть окно, незавершённые файлы не сохранятся.'
+      });
+      if (choice === 0) {
+        e.preventDefault();
+        return;
       }
-    });
+      engine.cancel();
+    }
+    saveWindowState();
   });
 
-  // Остальной код функции без изменений...
-}
-
-
-// Храним глобальную ссылку на окно, чтобы оно не закрывалось при сборке мусора
-let mainWindow;
-
-async function createWindow() {
-  mainWindow = new BrowserWindow({
-    width: 600,
-    height: 590 + 70,
-    minWidth: 500,
-    minHeight: 500,
-    maxWidth: 790,
-    maxHeight: 830,
-    resizable: true,
-    frame: false, // Убирает стандартную рамку окна
-    titleBarStyle: 'hidden',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false
-    },
-    icon: path.join(__dirname, 'src/icon.png'),
-    autoHideMenuBar: true,
-    transparent: true
-  });
-
-  // splashWindow.loadFile('splash.html');
-
-  // mainWindow.once('ready-to-show', () => {
-  //   splashWindow.close();
-  //   mainWindow.show();
-  // });
-
-  // Загружаем HTML-файл в окно
-  if (process.env.NODE_ENV === 'development') {
-    // В режиме разработки загружаем локальный сервер Vue на порту 8085
-    mainWindow.loadURL('http://localhost:8085');
-    // mainWindow.webContents.openDevTools();
-  } else {
-    // В продакшне загружаем собранный HTML
-    mainWindow.loadFile(path.join(__dirname, 'dist/index.html'));
-  }
-
-  // Обработчик закрытия окна
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
-
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
-    mainWindow.webContents.executeJavaScript(`
-      document.body.style.opacity = 0;
-      let fadeIn = setInterval(() => {
-        let opacity = parseFloat(document.body.style.opacity);
-        if (opacity < 1) {
-          document.body.style.opacity = opacity + 0.1;
-        } else {
-          clearInterval(fadeIn);
-        }
-      }, 30);
-    `);
-  });
 }
 
+function send(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+}
 
+nativeTheme.on('updated', () => {
+  if (mainWindow && isWin) mainWindow.setTitleBarOverlay(overlayColors());
+  if (mainWindow) mainWindow.setBackgroundColor(overlayColors().color);
+});
 
-
-
-// Запуск приложения
 app.whenReady().then(() => {
+  const logFile = path.join(app.getPath('logs'), 'hzconv.log');
+  logger.setFile(logFile);
+  engine = new EngineHost({ logFile });
+  engine.on('event', (channel, payload) => send(channel, payload));
+  engine.on('crash', () => send('engine:crash', null));
   createWindow();
-
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
-// Выход из приложения на всех платформах кроме macOS
+app.on('before-quit', () => {
+  engine?.cancel();
+  engine?.kill();
+});
+
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
+  if (!isMac) app.quit();
+});
+
+// ——— Валидация входных данных IPC ———
+
+const isStr = (v) => typeof v === 'string' && v.length > 0 && v.length < 32768;
+const strList = (v) => (Array.isArray(v) ? v.filter(isStr) : []);
+const unit = (v) => Number.isFinite(v) && v >= 0 && v <= 1;
+
+function sanitizeEdit(edit) {
+  if (!edit || typeof edit !== 'object') return null;
+  const out = {
+    rotate: [90, 180, 270].includes(edit.rotate) ? edit.rotate : 0,
+    flipH: edit.flipH === true,
+    flipV: edit.flipV === true,
+    crop: null
+  };
+  const c = edit.crop;
+  if (c && unit(c.x) && unit(c.y) && unit(c.w) && unit(c.h) && c.w > 0 && c.h > 0) {
+    out.crop = { x: c.x, y: c.y, w: Math.min(c.w, 1 - c.x), h: Math.min(c.h, 1 - c.y) };
   }
+  return out.rotate || out.flipH || out.flipV || out.crop ? out : null;
+}
+
+function sanitizeItem(item) {
+  if (!item || !isStr(item.path)) return null;
+  return { id: String(item.id ?? item.path), path: item.path, baseDir: isStr(item.baseDir) ? item.baseDir : null, edit: sanitizeEdit(item.edit) };
+}
+
+// ——— IPC ———
+
+ipcMain.handle('app:info', () => ({
+  formats,
+  defaults,
+  platform: process.platform,
+  version: app.getVersion(),
+  cpus: os.cpus().length,
+  logs: app.getPath('logs'),
+  ffmpeg: Boolean(ffmpegPath),
+  theme: nativeTheme.themeSource
+}));
+
+ipcMain.handle('app:set-theme', (_e, theme) => {
+  if (['system', 'light', 'dark'].includes(theme)) nativeTheme.themeSource = theme;
+  return nativeTheme.shouldUseDarkColors;
 });
 
-// IPC обработчики для взаимодействия с UI
-
-// Получение поддерживаемых форматов
-ipcMain.handle('get-supported-formats', () => {
-  return allSupportedFormats;
+ipcMain.handle('window:command', (e, command) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (!win) return;
+  if (command === 'minimize') win.minimize();
+  if (command === 'toggle-maximize') (win.isMaximized() ? win.unmaximize() : win.maximize());
+  if (command === 'close') win.close();
 });
 
-// Открытие диалога выбора файлов
-ipcMain.handle('open-file-dialog', async (event, options = {}) => {
+ipcMain.handle('dialog:open-files', async () => {
+  const all = [...formats.input.image, ...formats.input.video, ...formats.input.audio];
+  const res = await dialog.showOpenDialog(mainWindow, {
+    title: 'Добавить файлы',
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: 'Все поддерживаемые', extensions: all },
+      { name: 'Изображения', extensions: formats.input.image },
+      { name: 'Видео', extensions: formats.input.video },
+      { name: 'Аудио', extensions: formats.input.audio }
+    ]
+  });
+  return res.canceled ? [] : res.filePaths;
+});
+
+ipcMain.handle('dialog:open-folder', async (_e, opts = {}) => {
+  const res = await dialog.showOpenDialog(mainWindow, {
+    title: isStr(opts.title) ? opts.title : 'Выбрать папку',
+    defaultPath: isStr(opts.defaultPath) ? opts.defaultPath : undefined,
+    properties: ['openDirectory', 'createDirectory']
+  });
+  return res.canceled ? null : res.filePaths[0] || null;
+});
+
+ipcMain.handle('fs:expand', (_e, { paths, recursive = true, exclude = [] } = {}) =>
+  FileManager.expandPaths(strList(paths), { recursive: recursive !== false, exclude: strList(exclude) })
+);
+
+ipcMain.handle('fs:scan-folder', async (_e, { dir, recursive = true, formats: fmts = [], excluded = [], exclude = [] } = {}) => {
+  if (!isStr(dir)) return [];
+  const files = await FileManager.getFilesFromDirectory(dir, { recursive: recursive !== false, formats: strList(fmts), excluded: (Array.isArray(excluded) ? excluded : []).filter((r) => typeof r === 'string'), exclude: strList(exclude) });
+  return files.map((p) => ({ path: p, baseDir: dir }));
+});
+
+ipcMain.handle('fs:kind', async (_e, p) => {
+  if (!isStr(p)) return null;
   try {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openFile', 'multiSelections'],
-      filters: options.filters || []
-    });
-    
-    return result.filePaths || [];
-  } catch (error) {
-    console.error('Ошибка открытия диалога:', error);
-    return [];
-  }
-});
-
-// Открытие диалога выбора директории
-ipcMain.handle('open-directory-dialog', async () => {
-  try {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openDirectory']
-    });
-    
-    return result.filePaths.length > 0 ? result.filePaths[0] : null;
-  } catch (error) {
-    console.error('Ошибка открытия диалога директорий:', error);
+    return (await fs.stat(p)).isDirectory() ? 'dir' : 'file';
+  } catch {
     return null;
   }
 });
 
+ipcMain.handle('fs:subfolders', (_e, { dir, exclude = [] } = {}) => (isStr(dir) ? FileManager.getSubfolders(dir, { recursive: true, exclude: strList(exclude) }) : []));
 
-// В main.js добавьте эту функцию в начале файла
-function logDetail(prefix, object) {
-  console.log(`${prefix}: ${JSON.stringify(object, null, 2)}`);
-}
+ipcMain.handle('media:inspect', (_e, paths) => engine.call('inspect', strList(paths)));
+ipcMain.handle('media:details', (_e, filePath) => (isStr(filePath) ? engine.call('details', filePath) : null));
 
-// Обработчик для конвертации одного файла через IPC
-ipcMain.handle('convert-file', async (event, { filePath, options }) => {
-  return await convertSingleFile(filePath, options);
+ipcMain.handle('media:preview', (_e, { path: filePath, edit, maxSize = 1600, time = null, autoOrient = true } = {}) => {
+  if (!isStr(filePath)) throw new Error('Не указан файл');
+  const e = sanitizeEdit(edit) || {};
+  return engine.call('preview', filePath, { edit: { ...e, crop: null }, maxSize: Math.min(4096, Math.max(256, Number(maxSize) || 1600)), time: Number.isFinite(time) ? time : null, autoOrient: autoOrient !== false });
 });
 
-
-ipcMain.handle('window', async (event, command) => {
-  const window = BrowserWindow.fromWebContents(event.sender);
-  
-  switch(command) {
-    case 'close':
-      window.close();
-      app.quit();
-      break;
-    case 'minimize':
-      window.minimize();
-      break;
-    case 'maximize':
-      if (window.isMaximized()) {
-        window.unmaximize();
-      } else {
-        window.maximize();
-      }
-      break;
-  }
+ipcMain.handle('media:estimate', (_e, { item, settings } = {}) => {
+  const it = sanitizeItem(item);
+  if (!it) throw new Error('Не указан файл');
+  return engine.call('estimate', it, settings);
 });
 
+ipcMain.handle('batch:scan', (_e, { source, settings } = {}) => engine.call('batchScan', source, settings));
 
-
-
-// Конвертация нескольких файлов
-ipcMain.handle('convert-files', async (event, params) => {
-  console.log('Received in main process:', params);
-
-  const { filePaths, options } = params;
-
-  if (!Array.isArray(filePaths) || filePaths.length === 0) {
-    console.error('Invalid or empty filePaths:', filePaths);
-    return [];
-  }
-
-  // Запускаем контроллер конвертации
-  conversionController.startConversion(filePaths.length);
-
-  const results = [];
-
-  for (const filePath of filePaths) {
-    // Проверяем, не была ли запрошена отмена
-    if (conversionController.isConversionCancelled()) {
-      console.log('Конвертация файлов отменена пользователем');
-      results.push({
-        success: false,
-        cancelled: true,
-        filePath
-      });
-      continue;
-    }
-
-    try {
-      const result = await convertSingleFile(filePath, options);
-      results.push(result);
-    } catch (error) {
-      console.error(`Error converting file ${filePath}:`, error);
-      results.push({
-        success: false,
-        error: error.message || 'Unknown error',
-        filePath
-      });
-    }
-  }
-
-  // Завершаем конвертацию
-  conversionController.finishConversion(results);
-
-  return results;
+ipcMain.handle('batch:start', async (_e, { source, settings, onlyPaths } = {}) => {
+  if (engine.busy) throw new Error('Конвертация уже идёт');
+  const summary = await engine.call('batchStart', { source, settings, onlyPaths: strList(onlyPaths) });
+  if (settings?.output?.openWhenDone && summary.done > 0 && summary.outputDirs.length) shell.openPath(summary.outputDirs[0]);
+  return summary;
 });
 
+ipcMain.handle('output:preview', (_e, { path: filePath, baseDir, settings } = {}) =>
+  isStr(filePath) ? engine.call('previewOutput', { path: filePath, baseDir: isStr(baseDir) ? baseDir : null }, settings) : null
+);
 
+ipcMain.handle('app:open-logs', () => shell.openPath(app.getPath('logs')));
 
-// Получение файлов из директории
-ipcMain.handle('get-files-from-directory', async (event, { dirPath, formats = [], recursive = false, selectedSubfolders = [] }) => {
-  try {
-    console.log(`Запрос на получение файлов из директории: ${dirPath}`);
-    console.log(`Форматы: ${formats.join(', ')}`);
-    console.log(`Рекурсивно: ${recursive}`);
-    console.log(`Выбранные подпапки: ${selectedSubfolders.length > 0 ? selectedSubfolders.join(', ') : 'все'}`);
-
-    const files = await FileManager.getFilesFromDirectory(dirPath, formats, recursive, selectedSubfolders);
-    return files;
-  } catch (error) {
-    console.error('Ошибка при получении файлов из директории:', error);
-    throw error;
+ipcMain.handle('convert:start', async (_e, { items, settings } = {}) => {
+  const list = (Array.isArray(items) ? items : []).map(sanitizeItem).filter(Boolean);
+  if (!list.length) throw new Error('Очередь пуста');
+  if (engine.busy) throw new Error('Конвертация уже идёт');
+  const summary = await engine.call('convert', list, settings);
+  if (settings?.output?.openWhenDone && summary.done > 0 && summary.outputDirs.length) {
+    shell.openPath(summary.outputDirs[0]);
   }
+  return summary;
 });
 
-// Получение списка подпапок
-ipcMain.handle('get-subfolders', async (event, { dirPath, recursive = false }) => {
-  try {
-    const subfolders = await FileManager.getSubfolders(dirPath, recursive);
-    return subfolders;
-  } catch (error) {
-    console.error('Ошибка при получении подпапок:', error);
-    throw error;
-  }
+ipcMain.handle('convert:cancel', () => engine.cancel());
+
+ipcMain.handle('shell:reveal', (_e, p) => {
+  if (isStr(p) && fs.existsSync(p)) shell.showItemInFolder(p);
 });
 
+ipcMain.handle('shell:open', async (_e, p) => {
+  if (!isStr(p) || !fs.existsSync(p)) return 'Файл не найден';
+  return shell.openPath(p);
+});
 
-
-// Модифицируем функцию для конвертации директории
-ipcMain.handle('convert-directory', async (event, { dirPath, options, formats = [], recursive = false, selectedSubfolders = [] }) => {
-  try {
-    // Получаем список файлов из директории
-    const filePaths = await FileManager.getFilesFromDirectory(dirPath, formats, recursive, selectedSubfolders);
-
-    if (filePaths.length === 0) {
-      logger.info('В директории не найдено подходящих файлов');
-      return {
-        success: true,
-        totalFiles: 0,
-        successCount: 0,
-        message: 'В директории не найдено подходящих файлов'
-      };
-    }
-
-    // Логируем начало конвертации директории
-    logger.directoryStart(dirPath, filePaths.length);
-
-    // Запускаем контроллер конвертации
-    conversionController.startConversion(filePaths.length);
-
-    let successCount = 0;
-    let errorCount = 0;
-    let cancelledCount = 0;
-
-    // Конвертируем каждый файл
-    for (let i = 0; i < filePaths.length; i++) {
-      // Проверяем, не была ли запрошена отмена
-      if (conversionController.isConversionCancelled()) {
-        logger.info('Конвертация директории отменена пользователем');
-        cancelledCount = filePaths.length - i;
-        break;
-      }
-
-      const filePath = filePaths[i];
-
-      // Сообщаем о прогрессе
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('directory-conversion-progress', {
-          currentFile: i + 1,
-          totalFiles: filePaths.length,
-          filePath
-        });
-      }
-
-      try {
-        const fileType = getFileType(filePath);
-
-        if (!fileType) {
-          // Файл с неподдерживаемым типом уже залогирован
-          continue;
-        }
-
-        const converter = getConverter(fileType);
-
-        // Генерируем выходной путь с учетом сохранения структуры папок
-        const outputPath = FileManager.generateOutputPath(filePath, dirPath, {
-          ...options,
-          format: options.format
-        });
-
-        if (!outputPath) {
-          // Файл уже был пропущен в FileManager с логированием
-          continue;
-        }
-
-        // Добавляем обработчики событий
-        converter.removeAllListeners();
-
-        converter.on('progress', (progress) => {
-          conversionController.updateFileProgress(filePath, progress);
-        });
-
-        // Запускаем конвертацию
-        await converter.convert(filePath, outputPath, options);
-
-        // Если конвертация была отменена во время выполнения
-        if (conversionController.isConversionCancelled()) {
-          cancelledCount++;
-          break;
-        }
-
-        // Логируем успешную конвертацию
-        logger.fileConverted(filePath, outputPath);
-
-        successCount++;
-        conversionController.fileCompleted(filePath, { success: true });
-      } catch (fileError) {
-        logger.fileError(filePath, fileError.message);
-        errorCount++;
-        conversionController.fileCompleted(filePath, { success: false, error: fileError.message });
-      }
-    }
-
-    // Логируем завершение конвертации директории
-    logger.directoryComplete(successCount, errorCount, filePaths.length);
-
-    // Завершаем конвертацию
-    const finalResult = {
-      success: true,
-      totalFiles: filePaths.length,
-      successCount,
-      errorCount,
-      cancelledCount
-    };
-
-    conversionController.finishConversion(finalResult);
-
-    return finalResult;
-  } catch (error) {
-    logger.error('Ошибка при конвертации директории', error.message);
-    conversionController.finishConversion({ success: false, error: error.message });
-    return {
-      success: false,
-      error: error.message || 'Неизвестная ошибка'
-    };
-  }
+// Картинка из буфера обмена сохраняется в «Изображения/Hzconv», чтобы у неё была понятная папка.
+ipcMain.handle('clipboard:image', async () => {
+  const image = clipboard.readImage();
+  if (image.isEmpty()) return null;
+  const dir = path.join(app.getPath('pictures'), 'Hzconv');
+  await fs.ensureDir(dir);
+  const d = new Date();
+  const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}.${String(d.getMinutes()).padStart(2, '0')}.${String(d.getSeconds()).padStart(2, '0')}`;
+  const file = path.join(dir, `Вставка ${stamp}.png`);
+  await fs.writeFile(file, image.toPNG());
+  return file;
 });
