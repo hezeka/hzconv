@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld('hz', {
 
   info: () => invoke('app:info'),
   setTheme: (theme) => invoke('app:set-theme', theme),
+  prefs: () => invoke('app:prefs'),
+  setPrefs: (patch) => invoke('app:set-prefs', patch),
+  relaunch: () => invoke('app:relaunch'),
   window: (command) => invoke('window:command', command),
   onWindowState: subscribe('window:state'),
   onOpenPaths: subscribe('app:open-paths'),

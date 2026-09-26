@@ -1,6 +1,6 @@
 {
   "name": "hzconv",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Конвертер изображений, видео и аудио",
   "main": "main.js",
   "scripts": {
@@ -24,13 +24,18 @@
       "src/main/**/*",
       "src/shared/**/*",
       "src/icon.png",
-      "package.json"
+      "package.json",
+      "!**/node_modules/@img/sharp-*musl*/**",
+      "!**/node_modules/@img/sharp-wasm32/**"
     ],
     "asarUnpack": [
       "**/node_modules/sharp/**/*",
       "**/node_modules/@img/**/*",
-      "**/node_modules/ffmpeg-static/**/*",
-      "**/node_modules/@ffprobe-installer/**/*"
+      "**/node_modules/ffmpeg-static/**/*"
+    ],
+    "electronLanguages": [
+      "ru",
+      "en-US"
     ],
     "directories": {
       "output": "build"
@@ -73,7 +78,6 @@
   "author": "HZK",
   "license": "ISC",
   "dependencies": {
-    "@ffprobe-installer/ffprobe": "^2.1.2",
     "ffmpeg-static": "^5.2.0",
     "fluent-ffmpeg": "^2.1.2",
     "fs-extra": "^11.1.1",

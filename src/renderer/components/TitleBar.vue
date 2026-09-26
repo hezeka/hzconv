@@ -22,7 +22,7 @@
     </div>
 
     <div class="titlebar__actions">
-      <UiButton variant="ghost" size="s" icon="keyboard" title="Горячие клавиши (?)" @click="ui.shortcuts = true" />
+      <UiButton variant="ghost" size="s" icon="keyboard" title="Справка и горячие клавиши (?)" @click="ui.shortcuts = true" />
       <UiButton variant="ghost" size="s" :icon="themeIcon" :title="themeTitle" @click="cycleTheme" />
     </div>
 

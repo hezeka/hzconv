@@ -20,44 +20,39 @@ function parseTime(value) {
   return s.split(':').reduce((acc, part) => acc * 60 + parseFloat(part), 0);
 }
 
-function parseRate(r) {
-  if (!r || r === '0/0') return null;
-  const [a, b] = String(r).split('/').map(Number);
-  return b ? a / b : a || null;
-}
-
+/** Поворот при показе, кратный 90°: матрица −90° (телефон держали вертикально) → 90. */
 function streamRotation(stream) {
-  const tag = Number(stream.tags?.rotate);
-  const side = (stream.side_data_list || []).find((d) => d.rotation !== undefined);
-  const deg = Number.isFinite(tag) && tag ? tag : side ? -Number(side.rotation) : 0;
+  const deg = stream.rotation ? -stream.rotation : 0;
   return ((Math.round(deg / 90) * 90) % 360 + 360) % 360;
 }
 
-async function probeMedia(filePath) {
-  const data = await probe(filePath);
-  const streams = data.streams || [];
-  const video = streams.find((s) => s.codec_type === 'video' && !s.disposition?.attached_pic);
-  const cover = streams.find((s) => s.codec_type === 'video' && s.disposition?.attached_pic);
-  const audio = streams.find((s) => s.codec_type === 'audio');
-  const duration = Number(data.format?.duration) || Number(video?.duration) || Number(audio?.duration) || 0;
+/** Сводка по разобранному выводу ffmpeg: размеры с учётом поворота, звук, обложка. */
+function summarizeProbe(data) {
+  const video = data.streams.find((s) => s.type === 'video' && !s.cover);
+  const cover = data.streams.find((s) => s.type === 'video' && s.cover);
+  const audio = data.streams.find((s) => s.type === 'audio');
   const rotation = video ? streamRotation(video) : 0;
   let width = video?.width || 0;
   let height = video?.height || 0;
   if (rotation === 90 || rotation === 270) [width, height] = [height, width];
   return {
-    duration,
+    duration: data.duration,
     width,
     height,
-    fps: video ? parseRate(video.avg_frame_rate) || parseRate(video.r_frame_rate) : null,
+    fps: video?.fps || null,
     hasVideo: Boolean(video),
     hasAudio: Boolean(audio),
     hasCover: Boolean(cover),
-    videoCodec: video?.codec_name || null,
-    audioCodec: audio?.codec_name || null,
-    sampleRate: audio ? Number(audio.sample_rate) || null : null,
+    videoCodec: video?.codec || null,
+    audioCodec: audio?.codec || null,
+    sampleRate: audio?.sampleRate || null,
     channels: audio?.channels || null,
-    bitrate: Number(data.format?.bit_rate) || null
+    bitrate: data.bitrate
   };
+}
+
+async function probeMedia(filePath) {
+  return summarizeProbe(await probe(filePath));
 }
 
 // ——— Геометрия ———
@@ -354,4 +349,4 @@ function runFfmpeg({ inputs, outputPath, output, format, total, onProgress, onCa
   });
 }
 
-module.exports = { probeMedia, buildArgs, runFfmpeg, parseTime, CancelError, MUXER };
+module.exports = { probeMedia, summarizeProbe, buildArgs, runFfmpeg, parseTime, CancelError, MUXER };
